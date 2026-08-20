@@ -1,0 +1,3 @@
+plugins {
+    id 'com.android.tools.build:gradle' version '8.5.0' apply false
+}
