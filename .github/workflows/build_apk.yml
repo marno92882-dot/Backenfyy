@@ -82,7 +82,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.47.1"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
@@ -125,9 +125,21 @@ jobs:
           echo "INTERSHARE BUILD ENVIRONMENT"
           echo "=============================================="
 
+          echo ""
+          echo "Flutter:"
           flutter --version
+
+          echo ""
+          echo "Dart:"
           dart --version
+
+          echo ""
+          echo "Java:"
           java -version
+
+          echo ""
+          echo "Gradle:"
+          gradle --version || true
 
       # ============================================================
       # 8. DOWNLOAD ZIP
@@ -136,9 +148,11 @@ jobs:
       - name: Download Project ZIP
         shell: bash
         env:
-          ZIP_URL: ${{ inputs.zip_url }}
+          ZIP_URL_INPUT: ${{ inputs.zip_url }}
         run: |
           set -euo pipefail
+
+          ZIP_URL="$ZIP_URL_INPUT"
 
           if [ -z "$ZIP_URL" ]; then
             echo "❌ ZIP URL kosong."
@@ -151,6 +165,7 @@ jobs:
           fi
 
           echo "📥 Downloading project ZIP..."
+          echo "URL: $ZIP_URL"
 
           curl \
             --location \
@@ -173,6 +188,10 @@ jobs:
 
           ls -lh project.zip
 
+          echo ""
+          echo "ZIP file type:"
+          file project.zip
+
       # ============================================================
       # 9. EXTRACT
       # ============================================================
@@ -189,6 +208,10 @@ jobs:
           unzip -q project.zip -d flutter_project
 
           echo "✅ ZIP extracted."
+
+          echo ""
+          echo "Extracted files:"
+          find flutter_project -maxdepth 2 -type f | head -100
 
       # ============================================================
       # 10. FIND PUBSPEC
@@ -218,6 +241,11 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
           echo "=============================================="
+          echo "FLUTTER PROJECT DETECTED"
+          echo "=============================================="
+          echo "PUBSPEC:"
+          echo "$PUBSPEC"
+          echo ""
           echo "PROJECT:"
           echo "$PROJECT_DIR"
           echo "=============================================="
@@ -241,10 +269,68 @@ jobs:
             exit 1
           fi
 
+          if [ ! -f "$PROJECT_DIR/android/settings.gradle" ]; then
+            echo "❌ android/settings.gradle tidak ditemukan."
+            exit 1
+          fi
+
           echo "✅ Android project detected."
 
       # ============================================================
-      # 12. FIX ANDROID MANIFEST
+      # 12. SHOW GRADLE CONFIG
+      # ============================================================
+
+      - name: Inspect Gradle Configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "ANDROID GRADLE CONFIGURATION"
+          echo "=============================================="
+
+          echo ""
+          echo "----- settings.gradle -----"
+
+          sed -n '1,240p' \
+            "$PROJECT_DIR/android/settings.gradle" \
+            || true
+
+          echo ""
+          echo "----- settings.gradle.kts -----"
+
+          if [ -f "$PROJECT_DIR/android/settings.gradle.kts" ]; then
+            sed -n '1,240p' \
+              "$PROJECT_DIR/android/settings.gradle.kts"
+          else
+            echo "Not found."
+          fi
+
+          echo ""
+          echo "----- build.gradle -----"
+
+          if [ -f "$PROJECT_DIR/android/build.gradle" ]; then
+            sed -n '1,260p' \
+              "$PROJECT_DIR/android/build.gradle"
+          else
+            echo "Not found."
+          fi
+
+          echo ""
+          echo "----- app/build.gradle -----"
+
+          if [ -f "$PROJECT_DIR/android/app/build.gradle" ]; then
+            sed -n '1,300p' \
+              "$PROJECT_DIR/android/app/build.gradle"
+          else
+            echo "Not found."
+          fi
+
+          echo ""
+          echo "=============================================="
+
+      # ============================================================
+      # 13. FIX FLUTTER ANDROID EMBEDDING
       # ============================================================
 
       - name: Fix Flutter Android Embedding
@@ -323,7 +409,7 @@ jobs:
           PY
 
       # ============================================================
-      # 13. VERIFY EMBEDDING
+      # 14. VERIFY EMBEDDING
       # ============================================================
 
       - name: Verify Flutter Embedding
@@ -346,7 +432,89 @@ jobs:
           echo "✅ Flutter Embedding V2 verified."
 
       # ============================================================
-      # 14. GRADLE WRAPPER
+      # 15. FIX FLUTTER GRADLE REPOSITORY
+      # ============================================================
+
+      - name: Fix Flutter Gradle Repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SETTINGS="$PROJECT_DIR/android/settings.gradle"
+
+          if [ ! -f "$SETTINGS" ]; then
+            echo "❌ settings.gradle tidak ditemukan."
+            exit 1
+          fi
+
+          echo "=============================================="
+          echo "FIX FLUTTER GRADLE REPOSITORY"
+          echo "=============================================="
+
+          python3 - "$SETTINGS" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+
+          text = path.read_text()
+
+          old = "repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)"
+          new = "repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)"
+
+          if old in text:
+              text = text.replace(old, new)
+              path.write_text(text)
+              print("✅ Changed PREFER_SETTINGS -> PREFER_PROJECT.")
+
+          elif new in text:
+              print("✅ PREFER_PROJECT already configured.")
+
+          else:
+              print("ℹ️ repositoriesMode not found.")
+              print("No repository mode override was changed.")
+
+          PY
+
+          echo ""
+          echo "----- Updated settings.gradle -----"
+
+          sed -n '1,260p' "$SETTINGS"
+
+          echo ""
+          echo "=============================================="
+
+      # ============================================================
+      # 16. VERIFY FLUTTER GRADLE REPOSITORY
+      # ============================================================
+
+      - name: Verify Flutter Gradle Repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SETTINGS="$PROJECT_DIR/android/settings.gradle"
+
+          if grep -q \
+            "repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)" \
+            "$SETTINGS"; then
+
+            echo "❌ PREFER_SETTINGS masih aktif."
+            exit 1
+          fi
+
+          if grep -q \
+            "repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)" \
+            "$SETTINGS"; then
+
+            echo "✅ PREFER_PROJECT verified."
+          else
+            echo "ℹ️ Tidak ada repositoriesMode override."
+            echo "Flutter repository configuration akan digunakan."
+          fi
+
+      # ============================================================
+      # 17. GRADLE WRAPPER
       # ============================================================
 
       - name: Prepare Gradle Wrapper
@@ -357,27 +525,58 @@ jobs:
           if [ -f "$PROJECT_DIR/android/gradlew" ]; then
             chmod +x "$PROJECT_DIR/android/gradlew"
             echo "✅ gradlew executable."
+          else
+            echo "❌ gradlew tidak ditemukan."
+            exit 1
           fi
 
       # ============================================================
-      # 15. NO GRADLE OVERRIDE
+      # 18. VERIFY GRADLE CONFIGURATION
       # ============================================================
 
-      - name: Preserve Project Gradle
+      - name: Verify Gradle Configuration
         shell: bash
         run: |
           set -euo pipefail
 
           echo "=============================================="
-          echo "GRADLE / AGP OVERRIDE DISABLED"
+          echo "GRADLE CONFIGURATION"
           echo "=============================================="
 
-          echo "Using Gradle configuration from ZIP."
-          echo "Using AGP configuration from ZIP."
-          echo "Using Kotlin configuration from ZIP."
+          echo "Gradle configuration from ZIP is preserved."
+          echo "AGP configuration from ZIP is preserved."
+          echo "Kotlin configuration from ZIP is preserved."
+          echo "Only Flutter repository compatibility is patched."
+
+          echo ""
+
+          echo "repositoriesMode:"
+          grep -n \
+            "repositoriesMode" \
+            "$PROJECT_DIR/android/settings.gradle" \
+            || true
+
+          echo ""
+
+          echo "Flutter Gradle plugin:"
+          grep -n \
+            "dev.flutter.flutter-gradle-plugin" \
+            "$PROJECT_DIR/android/settings.gradle" \
+            || true
 
       # ============================================================
-      # 16. FLUTTER CLEAN
+      # 19. FLUTTER DOCTOR
+      # ============================================================
+
+      - name: Flutter Doctor
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          flutter doctor -v || true
+
+      # ============================================================
+      # 20. FLUTTER CLEAN
       # ============================================================
 
       - name: Flutter Clean
@@ -392,7 +591,7 @@ jobs:
           echo "✅ Flutter clean complete."
 
       # ============================================================
-      # 17. PUB GET
+      # 21. PUB GET
       # ============================================================
 
       - name: Flutter Pub Get
@@ -411,7 +610,46 @@ jobs:
           echo "✅ Dependencies resolved."
 
       # ============================================================
-      # 18. BUILD
+      # 22. VERIFY FLUTTER GENERATED CONFIG
+      # ============================================================
+
+      - name: Verify Flutter Generated Configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "FLUTTER GENERATED CONFIGURATION"
+          echo "=============================================="
+
+          if [ -f "$PROJECT_DIR/android/local.properties" ]; then
+            echo ""
+            echo "----- local.properties -----"
+
+            sed \
+              's#flutter.sdk=.*#flutter.sdk=***#' \
+              "$PROJECT_DIR/android/local.properties" \
+              || true
+          fi
+
+          if [ -f "$PROJECT_DIR/android/settings.gradle" ]; then
+            echo ""
+            echo "Flutter plugin loader:"
+            grep -n \
+              "flutter-plugin-loader" \
+              "$PROJECT_DIR/android/settings.gradle" \
+              || true
+
+            echo ""
+            echo "Flutter Gradle plugin:"
+            grep -n \
+              "flutter-gradle-plugin" \
+              "$PROJECT_DIR/android/settings.gradle" \
+              || true
+          fi
+
+      # ============================================================
+      # 23. BUILD
       # ============================================================
 
       - name: Build InterShare APK
@@ -437,7 +675,7 @@ jobs:
           echo "=============================================="
 
       # ============================================================
-      # 19. FIND APK
+      # 24. FIND APK
       # ============================================================
 
       - name: Find APK
@@ -480,8 +718,12 @@ jobs:
           echo "Path: $APK_PATH"
           echo "Size: ${APK_MB} MB"
 
+          echo ""
+          echo "APK information:"
+          file "$APK_PATH"
+
       # ============================================================
-      # 20. ARTIFACT
+      # 25. ARTIFACT
       # ============================================================
 
       - name: Upload APK
@@ -493,7 +735,7 @@ jobs:
           if-no-files-found: error
 
       # ============================================================
-      # 21. TELEGRAM MESSAGE
+      # 26. TELEGRAM MESSAGE
       # ============================================================
 
       - name: Send Telegram Result
@@ -531,8 +773,10 @@ jobs:
             --data-urlencode "chat_id=${OWNER_ID}" \
             --data-urlencode "text=${MESSAGE}"
 
+          echo "✅ Telegram success message sent."
+
       # ============================================================
-      # 22. SEND APK
+      # 27. SEND APK
       # ============================================================
 
       - name: Send APK to Telegram
@@ -565,7 +809,7 @@ jobs:
           echo "✅ APK sent to Telegram."
 
       # ============================================================
-      # 23. FAILURE NOTIFICATION
+      # 28. FAILURE NOTIFICATION
       # ============================================================
 
       - name: Send Build Failure
