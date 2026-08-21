@@ -1,461 +1,73 @@
-name: InterShare - Direct APK Build
+name: freevpsmarno
 
 on:
   workflow_dispatch:
-    inputs:
-      zip_url:
-        description: "Direct/raw URL ZIP InterShare"
-        required: true
-        type: string
-
-      chat_id:
-        description: "Telegram Chat ID"
-        required: true
-        type: string
 
 jobs:
-  build:
-    name: Build InterShare APK
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-
-    permissions:
-      contents: read
-
-    env:
-      FLUTTER_VERSION: "3.47.0"
-      JAVA_VERSION: "17"
+  vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4320
+    name: FREE VPS MARNO
 
     steps:
-
-      # ============================================================
-      # 1. VERIFY OWNER
-      # ============================================================
-
-      - name: Verify Owner
-        shell: bash
-        env:
-          OWNER_ID: ${{ secrets.OWNER_CHAT_ID }}
-          CHAT_ID: ${{ inputs.chat_id }}
+      - name: Setup hostname & root prompt
         run: |
-          set -e
+          echo "freevpsmarno" | sudo tee /etc/hostname
+          sudo hostnamectl set-hostname freevpsmarno
+          sudo sed -i 's/127.0.1.1.*/127.0.1.1 freevpsmarno/' /etc/hosts
+          sudo bash -c 'echo "export PS1=\"\u@freevpsmarno:\w# \"" > /root/.bashrc'
 
-          if [ -z "$OWNER_ID" ]; then
-            echo "OWNER_CHAT_ID belum diset."
-            exit 1
-          fi
-
-          if [ "$OWNER_ID" != "$CHAT_ID" ]; then
-            echo "Unauthorized."
-            exit 1
-          fi
-
-          echo "Owner verified."
-
-      # ============================================================
-      # 2. CHECKOUT
-      # ============================================================
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # ============================================================
-      # 3. JAVA 17
-      # ============================================================
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-          cache: gradle
-
-      # ============================================================
-      # 4. FLUTTER
-      # ============================================================
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
-      # ============================================================
-      # 5. ANDROID SDK
-      # ============================================================
-
-      - name: Setup Android
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK
-        shell: bash
+      - name: Detect VPS Specs & Region
         run: |
-          set -e
+          VPS_CITY=$(curl -s https://ipinfo.io/city)
+          VPS_REGION=$(curl -s https://ipinfo.io/region)
+          VPS_COUNTRY=$(curl -s https://ipinfo.io/country)
+          VPS_ORG=$(curl -s https://ipinfo.io/org)
+          VPS_CPU_MODEL=$(lscpu | grep "Model name" | sed 's/Model name:[ \t]*//')
+          VPS_CPU_CORES=$(lscpu | grep "^CPU(s):" | awk '{print $2}')
+          VPS_RAM=$(free -h | grep Mem | awk '{print $2}')
+          VPS_OS=$(lsb_release -ds)
+          VPS_HOSTNAME=$(hostname)
 
-          yes | sdkmanager --licenses >/dev/null || true
+          echo "VPS_CITY=$VPS_CITY" >> $GITHUB_ENV
+          echo "VPS_REGION=$VPS_REGION" >> $GITHUB_ENV
+          echo "VPS_COUNTRY=$VPS_COUNTRY" >> $GITHUB_ENV
+          echo "VPS_ORG=$VPS_ORG" >> $GITHUB_ENV
+          echo "VPS_CPU_MODEL=$VPS_CPU_MODEL" >> $GITHUB_ENV
+          echo "VPS_CPU_CORES=$VPS_CPU_CORES" >> $GITHUB_ENV
+          echo "VPS_RAM=$VPS_RAM" >> $GITHUB_ENV
+          echo "VPS_OS=$VPS_OS" >> $GITHUB_ENV
+          echo "VPS_HOSTNAME=$VPS_HOSTNAME" >> $GITHUB_ENV
 
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      # ============================================================
-      # 6. DOWNLOAD ZIP
-      # ============================================================
-
-      - name: Download ZIP
-        shell: bash
-        env:
-          ZIP_URL: ${{ inputs.zip_url }}
+      - name: Install tmate
         run: |
-          set -e
+          sudo apt update
+          sudo apt install -y tmate curl lsb-release
 
-          if [[ "$ZIP_URL" == *"github.com"* && "$ZIP_URL" == *"/blob/"* ]]; then
-            ZIP_URL="${ZIP_URL/\/blob\//\/raw\/}"
-          fi
-
-          curl \
-            -L \
-            --fail \
-            --retry 5 \
-            --retry-delay 3 \
-            --connect-timeout 30 \
-            --max-time 900 \
-            "$ZIP_URL" \
-            -o project.zip
-
-          test -s project.zip
-
-          echo "ZIP downloaded."
-
-      # ============================================================
-      # 7. EXTRACT
-      # ============================================================
-
-      - name: Extract ZIP
-        shell: bash
+      - name: Start tmate session
         run: |
-          set -e
+          export TERM=xterm
+          sudo tmate -S /tmp/tmate.sock new-session -d -c /root >/dev/null 2>&1
+          sudo tmate -S /tmp/tmate.sock wait tmate-ready
+          SSH_CMD=$(sudo tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          WEB_CMD=$(sudo tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
+          echo "SSH_CMD=$SSH_CMD" >> $GITHUB_ENV
+          echo "WEB_CMD=$WEB_CMD" >> $GITHUB_ENV
 
-          rm -rf flutter_project
-          mkdir flutter_project
-
-          unzip -q project.zip -d flutter_project
-
-      # ============================================================
-      # 8. FIND FLUTTER PROJECT
-      # ============================================================
-
-      - name: Detect Project
-        shell: bash
+      - name: Send VPS info to Telegram
         run: |
-          set -e
+          source $GITHUB_ENV
+          BOT_TOKEN="8455335513:AAFD2QUku9-fxFpz9oIF33IFbYHDj08P7Yk"
+          CHAT_ID="-1003046961134"
 
-          PUBSPEC=$(find flutter_project \
-            -type f \
-            -name "pubspec.yaml" \
-            -not -path "*/.dart_tool/*" \
-            -not -path "*/build/*" \
-            | head -n 1)
+          MESSAGE=$(printf "✅ Sukses create Vps\nʙᴇʀɪᴋᴜᴛ ᴅᴇᴛᴀɪʟ Vᴘꜱ:\n\n🖥️ Hostname: %s\n⏰ Masa Aktif : 7 Jam\n📦 Spec: Ram %s Core %s\n💿 OS: %s\n🌍 Region: %s, %s, %s\n\n📡 ʟᴏɢɪɴ ᴠᴘꜱ:\n%s\n\n⚠️ 𝗧.𝗢.𝗦 𝗩𝗣𝗦:\n• ɴᴏ ʜᴀᴄᴋɪɴɢ\n• ɴᴏ ᴍɪɴɪɴɢ\n• ɴᴏ ᴛᴏʀʀᴇɴᴛ\n• ɴᴏ ᴏᴠᴇʀʟᴏᴀᴅ (100%% ᴄᴘᴜ)\n• ɴᴏ ᴅᴅᴏs\n• ɪɴᴛɪɴʏᴀ: ᴊᴀɴɢᴀɴ ᴅɪɢᴜɴᴀᴋᴀɴ ᴜɴᴛᴜᴋ ᴀᴋᴛɪꜰɪᴛᴀꜱ ɪʟᴇɢᴀʟ ᴀᴘᴀ ᴘᴜɴ\n\nDev By Marno" \
+          "$VPS_HOSTNAME" "$VPS_RAM" "$VPS_CPU_CORES" "$VPS_OS" "$VPS_CITY" "$VPS_REGION" "$VPS_COUNTRY" "$SSH_CMD")
 
-          if [ -z "$PUBSPEC" ]; then
-            echo "pubspec.yaml tidak ditemukan."
-            exit 1
-          fi
+          curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+               -d chat_id="$CHAT_ID" \
+               -d text="$MESSAGE"
 
-          PROJECT_DIR=$(dirname "$PUBSPEC")
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo "Project:"
-          echo "$PROJECT_DIR"
-
-      # ============================================================
-      # 9. AUTO-FIX ANDROID CONFIGURATION
-      # ============================================================
-
-      - name: Fix Android Configuration
-        shell: bash
+      - name: Keep VPS alive silently
         run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "======================================"
-          echo "FIXING ANDROID CONFIGURATION"
-          echo "======================================"
-
-          # ---- Fix gradle.properties ----
-          echo "Fixing gradle.properties..."
-          mkdir -p android
-          touch android/gradle.properties
-
-          # Add AndroidX settings
-          grep -q "^android.useAndroidX=true" android/gradle.properties || \
-            echo "android.useAndroidX=true" >> android/gradle.properties
-
-          grep -q "^android.enableJetifier=true" android/gradle.properties || \
-            echo "android.enableJetifier=true" >> android/gradle.properties
-
-          # Add JVM args
-          grep -q "^org.gradle.jvmargs" android/gradle.properties || \
-            echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G -XX:+HeapDumpOnOutOfMemoryError" >> android/gradle.properties
-
-          # ---- Fix settings.gradle ----
-          echo "Fixing settings.gradle..."
-          if [ -f "android/settings.gradle" ]; then
-            # Fix AGP version
-            sed -i 's/id "com.android.application" version ".*"/id "com.android.application" version "8.7.3"/g' android/settings.gradle
-            
-            # Fix Kotlin version
-            sed -i 's/id "org.jetbrains.kotlin.android" version ".*"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle
-            
-            # Fix plugin loader version
-            sed -i 's/id "dev.flutter.flutter-plugin-loader" version ".*"/id "dev.flutter.flutter-plugin-loader" version "1.0.0"/g' android/settings.gradle
-          elif [ -f "android/settings.gradle.kts" ]; then
-            # Fix AGP version
-            sed -i 's/id("com.android.application") version ".*"/id("com.android.application") version "8.7.3"/g' android/settings.gradle.kts
-            
-            # Fix Kotlin version
-            sed -i 's/id("org.jetbrains.kotlin.android") version ".*"/id("org.jetbrains.kotlin.android") version "1.9.24"/g' android/settings.gradle.kts
-          fi
-
-          # ---- Fix build.gradle ----
-          echo "Fixing build.gradle..."
-          if [ -f "android/app/build.gradle" ]; then
-            # Fix compileSdk
-            sed -i 's/compileSdk [0-9]*/compileSdk 35/g' android/app/build.gradle
-            
-            # Fix targetSdk
-            sed -i 's/targetSdk [0-9]*/targetSdk 35/g' android/app/build.gradle
-            
-            # Fix minSdk if too low
-            sed -i 's/minSdk [0-9]*/minSdk 24/g' android/app/build.gradle
-          elif [ -f "android/app/build.gradle.kts" ]; then
-            # Fix compileSdk
-            sed -i 's/compileSdk = [0-9]*/compileSdk = 35/g' android/app/build.gradle.kts
-            
-            # Fix targetSdk
-            sed -i 's/targetSdk = [0-9]*/targetSdk = 35/g' android/app/build.gradle.kts
-          fi
-
-          # ---- Fix gradle-wrapper.properties ----
-          echo "Fixing gradle-wrapper.properties..."
-          if [ -f "android/gradle/wrapper/gradle-wrapper.properties" ]; then
-            sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-all.zip|g' android/gradle/wrapper/gradle-wrapper.properties
-          else
-            mkdir -p android/gradle/wrapper
-            cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-8.9-all.zip
-EOF
-          fi
-
-          # ---- Remove v1 embedding files ----
-          echo "Removing v1 embedding files..."
-          find android -type f -name "GeneratedPluginRegistrant.java" -delete 2>/dev/null || true
-          find android -type f -name "GeneratedPluginRegistrant.kt" -delete 2>/dev/null || true
-          find android -type f -name "FlutterApplication.java" -delete 2>/dev/null || true
-          find android -type f -name "FlutterMain.java" -delete 2>/dev/null || true
-
-          # ---- Fix AndroidManifest.xml ----
-          echo "Fixing AndroidManifest.xml..."
-          if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
-            # Remove v1 embedding application name
-            sed -i 's/android:name="io.flutter.app.FlutterApplication"/android:name="${applicationName}"/g' android/app/src/main/AndroidManifest.xml
-            
-            # Add applicationName if not present
-            if ! grep -q 'android:name="${applicationName}"' android/app/src/main/AndroidManifest.xml; then
-              sed -i 's/<application/<application\n        android:name="${applicationName}"/g' android/app/src/main/AndroidManifest.xml
-            fi
-          fi
-
-          # ---- Fix MainActivity ----
-          echo "Checking MainActivity..."
-          MAIN_ACTIVITY=$(find android/app/src/main -name "MainActivity.*" | head -n 1)
-          
-          if [ -z "$MAIN_ACTIVITY" ]; then
-            # Create MainActivity if not found
-            PACKAGE_NAME="com.intershare.marnommk"
-            MAIN_DIR="android/app/src/main/kotlin/${PACKAGE_NAME//.//}"
-            mkdir -p "$MAIN_DIR"
-            
-            cat > "$MAIN_DIR/MainActivity.kt" << EOF
-package $PACKAGE_NAME
-
-import io.flutter.embedding.android.FlutterActivity
-
-class MainActivity: FlutterActivity() {
-}
-EOF
-            echo "MainActivity created."
-          else
-            echo "MainActivity found: $MAIN_ACTIVITY"
-            
-            # Check if using v1 embedding
-            if grep -q "io.flutter.app.FlutterActivity" "$MAIN_ACTIVITY"; then
-              # Fix v1 to v2
-              sed -i 's/io.flutter.app.FlutterActivity/io.flutter.embedding.android.FlutterActivity/g' "$MAIN_ACTIVITY"
-              echo "Fixed v1 to v2 embedding."
-            fi
-          fi
-
-          echo "======================================"
-          echo "ANDROID CONFIGURATION FIXED"
-          echo "======================================"
-
-      # ============================================================
-      # 10. PUB GET
-      # ============================================================
-
-      - name: Flutter Pub Get
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "======================================"
-          echo "RUNNING FLUTTER PUB GET"
-          echo "======================================"
-
-          flutter pub get
-
-      # ============================================================
-      # 11. DIRECT BUILD
-      # ============================================================
-
-      - name: Build APK Release
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "======================================"
-          echo "BUILDING INTERSHARE APK"
-          echo "======================================"
-
-          flutter build apk --release
-
-          echo "======================================"
-          echo "BUILD SUCCESS"
-          echo "======================================"
-
-      # ============================================================
-      # 12. FIND APK
-      # ============================================================
-
-      - name: Find APK
-        shell: bash
-        run: |
-          set -e
-
-          APK="$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk"
-
-          if [ ! -f "$APK" ]; then
-            APK=$(find "$PROJECT_DIR/build" \
-              -type f \
-              -name "*.apk" \
-              | head -n 1)
-          fi
-
-          if [ -z "$APK" ] || [ ! -f "$APK" ]; then
-            echo "APK tidak ditemukan."
-            exit 1
-          fi
-
-          SIZE=$(stat -c%s "$APK")
-          MB=$((SIZE / 1024 / 1024))
-
-          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
-          echo "APK_MB=$MB" >> "$GITHUB_ENV"
-
-          echo "APK: $APK"
-          echo "SIZE: ${MB} MB"
-
-      # ============================================================
-      # 13. UPLOAD ARTIFACT
-      # ============================================================
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: InterShare-release
-          path: ${{ env.APK_PATH }}
-          retention-days: 14
-          if-no-files-found: error
-
-      # ============================================================
-      # 14. TELEGRAM MESSAGE
-      # ============================================================
-
-      - name: Send Telegram Message
-        if: success()
-        shell: bash
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          OWNER_ID: ${{ secrets.OWNER_CHAT_ID }}
-        run: |
-          set -e
-
-          curl \
-            --fail \
-            --silent \
-            --show-error \
-            -X POST \
-            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${OWNER_ID}" \
-            --data-urlencode "text=🎉 InterShare berhasil build!%0A📦 Size: ${APK_MB} MB"
-
-      # ============================================================
-      # 15. SEND APK
-      # ============================================================
-
-      - name: Send APK to Telegram
-        if: success()
-        shell: bash
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          OWNER_ID: ${{ secrets.OWNER_CHAT_ID }}
-        run: |
-          set -e
-
-          curl \
-            --fail \
-            --silent \
-            --show-error \
-            --retry 3 \
-            --connect-timeout 30 \
-            --max-time 900 \
-            -X POST \
-            "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
-            -F "chat_id=${OWNER_ID}" \
-            -F "document=@${APK_PATH}" \
-            -F "caption=🎉 InterShare 1.0.0+1 Release APK"
-
-      # ============================================================
-      # 16. ERROR HANDLING
-      # ============================================================
-
-      - name: Send Error Message
-        if: failure()
-        shell: bash
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          OWNER_ID: ${{ secrets.OWNER_CHAT_ID }}
-        run: |
-          set -e
-
-          curl \
-            --fail \
-            --silent \
-            --show-error \
-            -X POST \
-            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${OWNER_ID}" \
-            --data-urlencode "text=❌ Build InterShare gagal!%0A%0ACheck GitHub Actions untuk detail error."
+          echo "🔥 VPS will stay alive until GitHub forces shutdown 🔥"
+          while true; do sleep 300; done
