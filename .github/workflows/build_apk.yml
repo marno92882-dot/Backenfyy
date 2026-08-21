@@ -9,7 +9,7 @@ on:
         type: string
 
       chat_id:
-        description: "Chat ID Telegram owner"
+        description: "Telegram Chat ID"
         required: true
         type: string
 
@@ -23,7 +23,7 @@ jobs:
       contents: read
 
     env:
-      FLUTTER_VERSION: "3.47.0"
+      FLUTTER_VERSION: "3.27.0"
       JAVA_VERSION: "17"
 
     steps:
@@ -61,7 +61,7 @@ jobs:
       # 2. CHECKOUT
       # ============================================================
 
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       # ============================================================
@@ -93,39 +93,32 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK 36
-        shell: bash
-        run: |
-          set -e
-
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"
-
-          echo "✅ Android SDK 36 ready."
-
       # ============================================================
-      # 6. INSTALL ZIP TOOLS
+      # 6. TOOLS
       # ============================================================
 
-      - name: Install ZIP tools
+      - name: Install Tools
         shell: bash
         run: |
           set -e
 
           sudo apt-get update
-          sudo apt-get install -y unzip curl file
+          sudo apt-get install -y unzip curl file python3
 
-          echo "✅ ZIP tools installed."
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          echo "✅ Build environment ready."
 
       # ============================================================
       # 7. DOWNLOAD ZIP
       # ============================================================
 
-      - name: Download InterShare ZIP
+      - name: Download Project ZIP
         shell: bash
         env:
           ZIP_URL: ${{ inputs.zip_url }}
@@ -137,12 +130,11 @@ jobs:
             exit 1
           fi
 
-          # Convert GitHub blob URL to raw URL
           if [[ "$ZIP_URL" == *"github.com"* && "$ZIP_URL" == *"/blob/"* ]]; then
             ZIP_URL="${ZIP_URL/\/blob\//\/raw\/}"
           fi
 
-          echo "📥 Downloading ZIP..."
+          echo "📥 Downloading project..."
 
           curl \
             --location \
@@ -156,18 +148,13 @@ jobs:
             "$ZIP_URL" \
             --output project.zip
 
-          if [ ! -s project.zip ]; then
-            echo "❌ project.zip kosong."
-            exit 1
-          fi
-
-          echo "📦 ZIP size:"
-          du -h project.zip
+          test -s project.zip
 
           echo "✅ ZIP downloaded."
+          du -h project.zip
 
       # ============================================================
-      # 8. EXTRACT ZIP
+      # 8. EXTRACT
       # ============================================================
 
       - name: Extract Project
@@ -180,10 +167,10 @@ jobs:
 
           unzip -q project.zip -d flutter_project
 
-          echo "✅ Project extracted."
+          echo "✅ ZIP extracted."
 
       # ============================================================
-      # 9. DETECT FLUTTER PROJECT
+      # 9. DETECT PUBSPEC
       # ============================================================
 
       - name: Detect Flutter Project
@@ -209,14 +196,14 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "📁 Flutter project:"
+          echo "📁 Project:"
           echo "$PROJECT_DIR"
 
       # ============================================================
-      # 10. FIX FLUTTER ANDROID EMBEDDING V2
+      # 10. CHECK MANIFEST
       # ============================================================
 
-      - name: Fix Flutter Android Embedding
+      - name: Prepare Android Manifest
         shell: bash
         run: |
           set -e
@@ -224,55 +211,155 @@ jobs:
           MANIFEST="$PROJECT_DIR/android/app/src/main/AndroidManifest.xml"
 
           if [ ! -f "$MANIFEST" ]; then
-            echo "❌ AndroidManifest.xml tidak ditemukan."
+            echo "❌ AndroidManifest.xml tidak ditemukan:"
+            echo "$MANIFEST"
             exit 1
           fi
 
-          echo "Checking Flutter Android embedding..."
+          echo "📄 Checking AndroidManifest.xml"
 
-          if grep -q 'android:name="flutterEmbedding"' "$MANIFEST"; then
-            echo "✅ Flutter embedding metadata sudah ada."
-          else
-            sed -i '/<application/a\
-                <meta-data android:name="flutterEmbedding" android:value="2" />' "$MANIFEST"
+          # Pastikan XML dapat diparse sebelum melakukan perubahan.
+          python3 - "$MANIFEST" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
 
-            echo "✅ Flutter embedding V2 metadata ditambahkan."
-          fi
+          path = sys.argv[1]
 
-          echo
-          echo "===== FLUTTER EMBEDDING ====="
-
-          grep -n "flutterEmbedding" "$MANIFEST" || true
+          try:
+              ET.parse(path)
+              print("✅ AndroidManifest.xml valid.")
+          except Exception as e:
+              print("❌ AndroidManifest.xml invalid:")
+              print(e)
+              sys.exit(1)
+          PY
 
       # ============================================================
-      # 11. ENSURE ANDROIDX
+      # 11. ENSURE FLUTTER EMBEDDING V2
       # ============================================================
 
-      - name: Ensure AndroidX
+      - name: Ensure Flutter Embedding V2
         shell: bash
         run: |
           set -e
 
-          GRADLE_PROPERTIES="$PROJECT_DIR/android/gradle.properties"
+          MANIFEST="$PROJECT_DIR/android/app/src/main/AndroidManifest.xml"
 
-          mkdir -p "$PROJECT_DIR/android"
-          touch "$GRADLE_PROPERTIES"
+          python3 - "$MANIFEST" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
 
-          if ! grep -q "^android.useAndroidX=true" "$GRADLE_PROPERTIES"; then
-            echo "android.useAndroidX=true" >> "$GRADLE_PROPERTIES"
-          fi
+          path = sys.argv[1]
 
-          if ! grep -q "^android.enableJetifier=true" "$GRADLE_PROPERTIES"; then
-            echo "android.enableJetifier=true" >> "$GRADLE_PROPERTIES"
-          fi
+          tree = ET.parse(path)
+          root = tree.getroot()
+
+          application = root.find("application")
+
+          if application is None:
+              raise SystemExit(
+                  "❌ <application> tidak ditemukan di AndroidManifest.xml"
+              )
+
+          ANDROID_NS = "http://schemas.android.com/apk/res/android"
+
+          exists = False
+
+          for child in application:
+              if child.tag.endswith("meta-data"):
+                  name = child.attrib.get(
+                      "{%s}name" % ANDROID_NS
+                  )
+
+                  if name == "flutterEmbedding":
+                      exists = True
+
+                      child.set(
+                          "{%s}value" % ANDROID_NS,
+                          "2"
+                      )
+
+          if not exists:
+              metadata = ET.Element("meta-data")
+
+              metadata.set(
+                  "{%s}name" % ANDROID_NS,
+                  "flutterEmbedding"
+              )
+
+              metadata.set(
+                  "{%s}value" % ANDROID_NS,
+                  "2"
+              )
+
+              application.insert(0, metadata)
+
+          ET.register_namespace(
+              "android",
+              ANDROID_NS
+          )
+
+          tree.write(
+              path,
+              encoding="utf-8",
+              xml_declaration=True
+          )
+
+          print("✅ Flutter Android Embedding V2 configured.")
+          PY
+
+      # ============================================================
+      # 12. VALIDATE MANIFEST AGAIN
+      # ============================================================
+
+      - name: Validate Android Manifest
+        shell: bash
+        run: |
+          set -e
+
+          MANIFEST="$PROJECT_DIR/android/app/src/main/AndroidManifest.xml"
+
+          python3 - "$MANIFEST" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          path = sys.argv[1]
+
+          try:
+              ET.parse(path)
+              print("✅ AndroidManifest.xml valid after patch.")
+          except Exception as e:
+              print("❌ Manifest masih invalid:")
+              print(e)
+              sys.exit(1)
+          PY
+
+      # ============================================================
+      # 13. ANDROIDX
+      # ============================================================
+
+      - name: Configure AndroidX
+        shell: bash
+        run: |
+          set -e
+
+          PROPERTIES="$PROJECT_DIR/android/gradle.properties"
+
+          touch "$PROPERTIES"
+
+          grep -q "^android.useAndroidX=true" "$PROPERTIES" \
+            || echo "android.useAndroidX=true" >> "$PROPERTIES"
+
+          grep -q "^android.enableJetifier=true" "$PROPERTIES" \
+            || echo "android.enableJetifier=true" >> "$PROPERTIES"
 
           echo "✅ AndroidX configured."
 
       # ============================================================
-      # 12. FIX GRADLE WRAPPER PERMISSION
+      # 14. GRADLE PERMISSION
       # ============================================================
 
-      - name: Prepare Gradle
+      - name: Prepare Gradle Wrapper
         shell: bash
         run: |
           set -e
@@ -281,10 +368,10 @@ jobs:
             chmod +x "$PROJECT_DIR/android/gradlew"
           fi
 
-          echo "✅ Gradle prepared."
+          echo "✅ Gradle wrapper prepared."
 
       # ============================================================
-      # 13. FLUTTER PUB GET
+      # 15. PUB GET
       # ============================================================
 
       - name: Flutter Pub Get
@@ -296,35 +383,31 @@ jobs:
 
           flutter pub get
 
-          echo "✅ flutter pub get completed."
+          echo "✅ Dependencies installed."
 
       # ============================================================
-      # 14. BUILD APK DIRECTLY
+      # 16. DIRECT BUILD
       # ============================================================
 
-      - name: Build Release APK
+      - name: Build APK Release
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          echo
           echo "=============================================="
           echo "        INTERSHARE APK RELEASE BUILD"
           echo "=============================================="
-          echo
 
           flutter build apk --release
 
-          echo
           echo "=============================================="
           echo "             BUILD SUCCESS"
           echo "=============================================="
-          echo
 
       # ============================================================
-      # 15. FIND APK
+      # 17. FIND APK
       # ============================================================
 
       - name: Find APK
@@ -332,12 +415,10 @@ jobs:
         run: |
           set -e
 
-          DEFAULT_APK="$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk"
+          APK="$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk"
 
-          if [ -f "$DEFAULT_APK" ]; then
-            APK_PATH="$DEFAULT_APK"
-          else
-            APK_PATH="$(
+          if [ ! -f "$APK" ]; then
+            APK="$(
               find "$PROJECT_DIR/build" \
                 -type f \
                 -name "*.apk" \
@@ -345,49 +426,23 @@ jobs:
             )"
           fi
 
-          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+          if [ -z "$APK" ] || [ ! -f "$APK" ]; then
             echo "❌ APK tidak ditemukan."
             exit 1
           fi
 
-          APK_SIZE="$(stat -c%s "$APK_PATH")"
-          APK_MB="$((APK_SIZE / 1024 / 1024))"
+          SIZE=$(stat -c%s "$APK")
+          MB=$((SIZE / 1024 / 1024))
 
-          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
-          echo "APK_SIZE=$APK_SIZE" >> "$GITHUB_ENV"
-          echo "APK_MB=$APK_MB" >> "$GITHUB_ENV"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          echo "APK_MB=$MB" >> "$GITHUB_ENV"
 
-          echo "=============================================="
-          echo "APK FOUND"
-          echo "=============================================="
-          echo "Path : $APK_PATH"
-          echo "Size : ${APK_MB} MB"
+          echo "📦 APK:"
+          echo "$APK"
+          echo "📏 Size: ${MB} MB"
 
       # ============================================================
-      # 16. VERIFY APK
-      # ============================================================
-
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -e
-
-          if [ ! -f "$APK_PATH" ]; then
-            echo "❌ APK file tidak ditemukan."
-            exit 1
-          fi
-
-          if [ ! -s "$APK_PATH" ]; then
-            echo "❌ APK file kosong."
-            exit 1
-          fi
-
-          file "$APK_PATH"
-
-          echo "✅ APK valid."
-
-      # ============================================================
-      # 17. UPLOAD APK ARTIFACT
+      # 18. UPLOAD ARTIFACT
       # ============================================================
 
       - name: Upload APK Artifact
@@ -399,10 +454,10 @@ jobs:
           if-no-files-found: error
 
       # ============================================================
-      # 18. TELEGRAM SUCCESS MESSAGE
+      # 19. TELEGRAM MESSAGE
       # ============================================================
 
-      - name: Send Telegram Build Result
+      - name: Send Telegram Message
         if: success()
         shell: bash
         env:
@@ -411,22 +466,17 @@ jobs:
         run: |
           set -e
 
-          if [ -z "$BOT_TOKEN" ]; then
-            echo "❌ TELEGRAM_BOT_TOKEN belum diset."
-            exit 1
-          fi
-
-          if [ -z "$OWNER_ID" ]; then
-            echo "❌ OWNER_CHAT_ID belum diset."
-            exit 1
+          if [ -z "$BOT_TOKEN" ] || [ -z "$OWNER_ID" ]; then
+            echo "⚠️ Telegram credentials tidak tersedia."
+            exit 0
           fi
 
           TEXT="🎉 InterShare APK berhasil dibuat!
 
-          📱 App: InterShare
-          📦 Package: com.intershare.marnommk
-          🔢 Version: 1.0.0+1
-          📏 Size: ${APK_MB} MB
+          📱 InterShare
+          📦 com.intershare.marnommk
+          🔢 1.0.0+1
+          📏 ${APK_MB} MB
 
           ✅ Release build berhasil."
 
@@ -440,10 +490,8 @@ jobs:
             --data-urlencode "chat_id=${OWNER_ID}" \
             --data-urlencode "text=${TEXT}"
 
-          echo "✅ Telegram notification sent."
-
       # ============================================================
-      # 19. SEND APK TO TELEGRAM
+      # 20. SEND APK TELEGRAM
       # ============================================================
 
       - name: Send APK to Telegram
@@ -455,22 +503,10 @@ jobs:
         run: |
           set -e
 
-          if [ -z "$BOT_TOKEN" ]; then
-            echo "❌ TELEGRAM_BOT_TOKEN belum diset."
-            exit 1
+          if [ -z "$BOT_TOKEN" ] || [ -z "$OWNER_ID" ]; then
+            echo "⚠️ Telegram credentials tidak tersedia."
+            exit 0
           fi
-
-          if [ -z "$OWNER_ID" ]; then
-            echo "❌ OWNER_CHAT_ID belum diset."
-            exit 1
-          fi
-
-          if [ ! -f "$APK_PATH" ]; then
-            echo "❌ APK tidak ditemukan."
-            exit 1
-          fi
-
-          echo "📤 Sending APK to Telegram..."
 
           curl \
             --fail \
@@ -488,10 +524,10 @@ jobs:
           echo "✅ APK sent to Telegram."
 
       # ============================================================
-      # 20. TELEGRAM FAILURE NOTIFICATION
+      # 21. FAILURE MESSAGE
       # ============================================================
 
-      - name: Send Telegram Build Failure
+      - name: Send Build Failure
         if: failure()
         shell: bash
         env:
@@ -501,27 +537,17 @@ jobs:
           set -e
 
           if [ -z "$BOT_TOKEN" ] || [ -z "$OWNER_ID" ]; then
-            echo "⚠️ Telegram credentials tidak tersedia."
             exit 0
           fi
-
-          TEXT="❌ InterShare APK build gagal.
-
-          Repository: ${{ github.repository }}
-          Workflow: ${{ github.workflow }}
-          Run: #${{ github.run_number }}
-
-          Silakan cek log GitHub Actions."
 
           curl \
             --fail \
             --silent \
             --show-error \
-            --retry 3 \
+            --retry 2 \
             -X POST \
             "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${OWNER_ID}" \
-            --data-urlencode "text=${TEXT}" \
-            || true
+            --data-urlencode "text=❌ InterShare APK build gagal. Cek GitHub Actions log."
 
-          echo "⚠️ Failure notification sent."
+          echo "❌ Failure notification sent."
