@@ -4,14 +4,29 @@ on:
   workflow_dispatch:
     inputs:
       zip_url:
-        description: "URL ZIP project Flutter"
+        description: "URL file ZIP (raw/direct download link)"
         required: true
         type: string
 
       chat_id:
-        description: "Telegram Chat ID"
+        description: "Chat ID Telegram"
         required: true
         type: string
+
+permissions:
+  contents: read
+
+env:
+  # WAJIB cocok dengan project InterShare_Full_Project.zip
+  FLUTTER_VERSION: "3.47.0"
+  JAVA_VERSION: "17"
+
+  # Android project InterShare:
+  # AGP 8.13.2
+  # Gradle 8.13
+  # Kotlin 2.3.0
+  # compileSdk 36
+  # targetSdk 36
 
 jobs:
   build:
@@ -19,33 +34,26 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
 
-    permissions:
-      contents: read
-
-    env:
-      FLUTTER_VERSION: "3.47.1"
-      JAVA_VERSION: "17"
-
     steps:
 
-      # ============================================================
+      # ==========================================================
       # 1. VERIFY OWNER
-      # ============================================================
+      # ==========================================================
 
-      - name: Verify Owner
+      - name: Verify Owner ID
         shell: bash
-        env:
-          OWNER_ID: ${{ secrets.OWNER_CHAT_ID }}
-          CHAT_ID: ${{ inputs.chat_id }}
         run: |
           set -euo pipefail
 
-          if [ -z "${OWNER_ID:-}" ]; then
-            echo "ERROR: OWNER_CHAT_ID belum diset."
+          OWNER_ID="${{ secrets.OWNER_CHAT_ID }}"
+          CHAT_ID="${{ github.event.inputs.chat_id }}"
+
+          if [ -z "$OWNER_ID" ]; then
+            echo "ERROR: Secret OWNER_CHAT_ID belum diset."
             exit 1
           fi
 
-          if [ -z "${CHAT_ID:-}" ]; then
+          if [ -z "$CHAT_ID" ]; then
             echo "ERROR: chat_id kosong."
             exit 1
           fi
@@ -57,47 +65,36 @@ jobs:
 
           echo "Owner verified."
 
-      # ============================================================
+      # ==========================================================
       # 2. CHECKOUT
-      # ============================================================
+      # ==========================================================
 
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ============================================================
-      # 3. JAVA
-      # ============================================================
+      # ==========================================================
+      # 3. JAVA 17
+      # ==========================================================
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
           cache: gradle
 
-      # ============================================================
-      # 4. FLUTTER
-      # ============================================================
+      # ==========================================================
+      # 4. ANDROID SDK
+      # ==========================================================
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
-      # ============================================================
-      # 5. ANDROID SDK
-      # ============================================================
-
-      - name: Setup Android
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # ============================================================
-      # 6. TOOLS
-      # ============================================================
+      # ==========================================================
+      # 5. INSTALL SYSTEM TOOLS
+      # ==========================================================
 
-      - name: Install Tools
+      - name: Install build tools
         shell: bash
         run: |
           set -euo pipefail
@@ -108,56 +105,76 @@ jobs:
             unzip \
             curl \
             file \
-            python3 \
-            xmlstarlet
+            zip
 
-          echo "Tools installed."
+          echo "Build tools installed."
 
-      # ============================================================
-      # 7. ENVIRONMENT
-      # ============================================================
+      # ==========================================================
+      # 6. INSTALL REQUIRED ANDROID SDK
+      # ==========================================================
 
-      - name: Show Environment
+      - name: Install Android SDK 36
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=============================================="
-          echo "INTERSHARE BUILD ENVIRONMENT"
-          echo "=============================================="
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
+          echo "Android SDK 36 installed."
+
+      # ==========================================================
+      # 7. SETUP FLUTTER
+      # ==========================================================
+
+      - name: Setup Flutter 3.47.0
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # ==========================================================
+      # 8. FLUTTER DIAGNOSTICS
+      # ==========================================================
+
+      - name: Flutter diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
 
           flutter --version
           dart --version
-          java -version
 
-          echo ""
-          echo "FLUTTER ROOT:"
-          flutter doctor -v || true
+          echo "Flutter:"
+          flutter doctor -v
 
-      # ============================================================
-      # 8. DOWNLOAD ZIP
-      # ============================================================
+      # ==========================================================
+      # 9. DOWNLOAD ZIP
+      # ==========================================================
 
-      - name: Download Project ZIP
+      - name: Download InterShare ZIP
         shell: bash
-        env:
-          ZIP_URL_INPUT: ${{ inputs.zip_url }}
         run: |
           set -euo pipefail
 
-          ZIP_URL="$ZIP_URL_INPUT"
+          ZIP_URL="${{ github.event.inputs.zip_url }}"
 
           if [ -z "$ZIP_URL" ]; then
             echo "ERROR: ZIP URL kosong."
             exit 1
           fi
 
-          # GitHub blob -> raw
+          # Convert GitHub blob URL -> raw URL
           if [[ "$ZIP_URL" == *"github.com"* && "$ZIP_URL" == *"/blob/"* ]]; then
             ZIP_URL="${ZIP_URL/\/blob\//\/raw\/}"
           fi
 
-          echo "Downloading project ZIP..."
+          echo "Downloading project..."
 
           curl \
             --location \
@@ -165,6 +182,7 @@ jobs:
             --show-error \
             --silent \
             --retry 5 \
+            --retry-all-errors \
             --retry-delay 3 \
             --connect-timeout 30 \
             --max-time 900 \
@@ -172,18 +190,31 @@ jobs:
             --output project.zip
 
           if [ ! -s project.zip ]; then
-            echo "ERROR: ZIP kosong."
+            echo "ERROR: project.zip kosong."
             exit 1
           fi
 
-          file project.zip
-          ls -lh project.zip
+          echo "ZIP downloaded successfully."
 
-          echo "ZIP downloaded."
+          echo "ZIP size:"
+          du -h project.zip
 
-      # ============================================================
-      # 9. EXTRACT
-      # ============================================================
+      # ==========================================================
+      # 10. VALIDATE ZIP
+      # ==========================================================
+
+      - name: Validate ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          unzip -t project.zip >/dev/null
+
+          echo "ZIP integrity OK."
+
+      # ==========================================================
+      # 11. EXTRACT
+      # ==========================================================
 
       - name: Extract Project
         shell: bash
@@ -195,25 +226,26 @@ jobs:
 
           unzip -q project.zip -d flutter_project
 
-          echo "ZIP extracted."
+          echo "Project extracted."
 
-      # ============================================================
-      # 10. DETECT FLUTTER PROJECT
-      # ============================================================
+          echo "Top-level files:"
+          find flutter_project -maxdepth 3 -type f | sort | head -100
+
+      # ==========================================================
+      # 12. DETECT FLUTTER PROJECT
+      # ==========================================================
 
       - name: Detect Flutter Project
         shell: bash
         run: |
           set -euo pipefail
 
-          PUBSPEC="$(
-            find "$GITHUB_WORKSPACE/flutter_project" \
-              -type f \
-              -name "pubspec.yaml" \
-              -not -path "*/.dart_tool/*" \
-              -not -path "*/build/*" \
-              | head -n 1
-          )"
+          PUBSPEC="$(find "$GITHUB_WORKSPACE/flutter_project" \
+            -type f \
+            -name "pubspec.yaml" \
+            -not -path "*/.dart_tool/*" \
+            -not -path "*/build/*" \
+            | head -n 1)"
 
           if [ -z "$PUBSPEC" ]; then
             echo "ERROR: pubspec.yaml tidak ditemukan."
@@ -222,570 +254,105 @@ jobs:
 
           PROJECT_DIR="$(dirname "$PUBSPEC")"
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo "=============================================="
-          echo "FLUTTER PROJECT"
-          echo "=============================================="
-          echo "$PROJECT_DIR"
-
-      # ============================================================
-      # 11. CHECK ANDROID
-      # ============================================================
-
-      - name: Check Android Project
-        shell: bash
-        run: |
-          set -euo pipefail
+          if [ ! -f "$PROJECT_DIR/pubspec.yaml" ]; then
+            echo "ERROR: pubspec.yaml invalid."
+            exit 1
+          fi
 
           if [ ! -d "$PROJECT_DIR/android" ]; then
-            echo "ERROR: Folder android tidak ditemukan."
+            echo "ERROR: folder android tidak ditemukan."
             exit 1
           fi
 
-          if [ ! -f "$PROJECT_DIR/android/app/src/main/AndroidManifest.xml" ]; then
-            echo "ERROR: AndroidManifest.xml tidak ditemukan."
+          if [ ! -f "$PROJECT_DIR/android/settings.gradle" ]; then
+            echo "ERROR: android/settings.gradle tidak ditemukan."
             exit 1
           fi
 
-          echo "Android project detected."
-
-      # ============================================================
-      # 12. CREATE LOCAL.PROPERTIES
-      # ============================================================
-
-      - name: Create Android local.properties
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FLUTTER_SDK="$(flutter --version --machine | python3 -c 'import sys,json; print(json.load(sys.stdin)["flutterRoot"])')"
-
-          if [ -z "$FLUTTER_SDK" ]; then
-            echo "ERROR: Flutter SDK tidak ditemukan."
+          if [ ! -f "$PROJECT_DIR/android/app/build.gradle" ]; then
+            echo "ERROR: android/app/build.gradle tidak ditemukan."
             exit 1
           fi
 
-          ANDROID_DIR="$PROJECT_DIR/android"
-          LOCAL_PROPERTIES="$ANDROID_DIR/local.properties"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          mkdir -p "$ANDROID_DIR"
+          echo "Flutter project detected:"
+          echo "$PROJECT_DIR"
 
-          cat > "$LOCAL_PROPERTIES" <<EOF
-          sdk.dir=$ANDROID_HOME
-          flutter.sdk=$FLUTTER_SDK
-          EOF
+      # ==========================================================
+      # 13. VERIFY INTERSHARE PROJECT
+      # ==========================================================
 
-          echo "=============================================="
-          echo "local.properties"
-          echo "=============================================="
-
-          cat "$LOCAL_PROPERTIES"
-
-          if [ ! -f "$LOCAL_PROPERTIES" ]; then
-            echo "ERROR: local.properties gagal dibuat."
-            exit 1
-          fi
-
-          echo "local.properties created."
-
-      # ============================================================
-      # 13. FLUTTER EMBEDDING V2
-      # ============================================================
-
-      - name: Fix Flutter Android Embedding
+      - name: Verify InterShare configuration
         shell: bash
         run: |
           set -euo pipefail
 
-          MANIFEST="$PROJECT_DIR/android/app/src/main/AndroidManifest.xml"
+          cd "$PROJECT_DIR"
 
-          python3 - "$MANIFEST" <<'PY'
-          import sys
-          import xml.etree.ElementTree as ET
+          echo "Checking applicationId..."
 
-          path = sys.argv[1]
-          ANDROID = "http://schemas.android.com/apk/res/android"
+          grep -q 'applicationId = "com.intershare.marnommk"' \
+            android/app/build.gradle
 
-          ET.register_namespace("android", ANDROID)
+          echo "applicationId OK."
 
-          try:
-              tree = ET.parse(path)
-          except Exception as e:
-              print("ERROR: AndroidManifest.xml invalid:")
-              print(e)
-              sys.exit(1)
+          echo "Checking namespace..."
 
-          root = tree.getroot()
+          grep -q 'namespace = "com.intershare.marnommk"' \
+            android/app/build.gradle
 
-          application = root.find("application")
+          echo "namespace OK."
 
-          if application is None:
-              print("ERROR: <application> tidak ditemukan.")
-              sys.exit(1)
+          echo "Checking compileSdk..."
 
-          found = False
+          grep -q 'compileSdk = 36' \
+            android/app/build.gradle
 
-          for child in application:
-              if child.tag == "meta-data":
-                  name = child.attrib.get(f"{{{ANDROID}}}name")
+          echo "compileSdk OK."
 
-                  if name == "flutterEmbedding":
-                      child.set(
-                          f"{{{ANDROID}}}value",
-                          "2"
-                      )
-                      found = True
+          echo "Checking targetSdk..."
 
-          if not found:
-              metadata = ET.Element("meta-data")
+          grep -q 'targetSdk = 36' \
+            android/app/build.gradle
 
-              metadata.set(
-                  f"{{{ANDROID}}}name",
-                  "flutterEmbedding"
-              )
-
-              metadata.set(
-                  f"{{{ANDROID}}}value",
-                  "2"
-              )
-
-              application.insert(0, metadata)
-
-          tree.write(
-              path,
-              encoding="utf-8",
-              xml_declaration=True
-          )
-
-          print("Flutter Embedding V2 configured.")
-          PY
-
-      # ============================================================
-      # 14. VERIFY EMBEDDING
-      # ============================================================
-
-      - name: Verify Flutter Embedding
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo "targetSdk OK."
 
-          MANIFEST="$PROJECT_DIR/android/app/src/main/AndroidManifest.xml"
+          echo "Checking Gradle wrapper..."
 
-          if ! grep -q 'flutterEmbedding' "$MANIFEST"; then
-            echo "ERROR: flutterEmbedding tidak ditemukan."
-            exit 1
-          fi
+          grep -q 'gradle-8.13-' \
+            android/gradle/wrapper/gradle-wrapper.properties
 
-          if ! grep -q 'value="2"' "$MANIFEST"; then
-            echo "ERROR: Flutter Embedding V2 tidak aktif."
-            exit 1
-          fi
+          echo "Gradle 8.13 OK."
 
-          echo "Flutter Embedding V2 verified."
+          echo "Checking AGP..."
 
-      # ============================================================
-      # 15. FIX REPOSITORIES
-      # ============================================================
-
-      - name: Configure Android Repositories
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ANDROID_DIR="$PROJECT_DIR/android"
+          grep -q 'com.android.application" version "8.13.2"' \
+            android/settings.gradle
 
-          echo "=============================================="
-          echo "CONFIGURING MAVEN REPOSITORIES"
-          echo "=============================================="
+          echo "AGP 8.13.2 OK."
 
-          SETTINGS="$ANDROID_DIR/settings.gradle"
-          SETTINGS_KTS="$ANDROID_DIR/settings.gradle.kts"
-
-          # --------------------------------------------------------
-          # settings.gradle
-          # --------------------------------------------------------
+          echo "Checking Kotlin..."
 
-          if [ -f "$SETTINGS" ]; then
+          grep -q 'org.jetbrains.kotlin.android" version "2.3.0"' \
+            android/settings.gradle
 
-            cp "$SETTINGS" "$SETTINGS.backup"
+          echo "Kotlin 2.3.0 OK."
 
-            python3 - "$SETTINGS" <<'PY'
-          import sys
-          import re
+          echo "Checking assets..."
 
-          path = sys.argv[1]
+          test -f assets/intershare.mp4
+          test -f assets/app_icon.png
 
-          with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
+          echo "Assets OK."
 
-          # Remove old repository declarations that force
-          # dependency resolution only through Flutter's repository.
-          text = re.sub(
-              r'(?s)allprojects\s*\{\s*repositories\s*\{.*?\}\s*\}',
-              '',
-              text
-          )
+          echo "InterShare project validation passed."
 
-          # Remove Flutter-only repository if present.
-          text = re.sub(
-              r'(?m)^\s*maven\s*\{\s*url\s*[=]?\s*.*download\.flutter\.io.*\}\s*$',
-              '',
-              text
-          )
-
-          # Ensure pluginManagement has repositories.
-          if "pluginManagement {" in text:
-              text = text.replace(
-                  "pluginManagement {",
-                  """pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }""",
-                  1
-              )
-
-          # Prevent duplicate repository blocks from becoming
-          # syntactically dangerous.
-          text = re.sub(
-              r'(\n\s*repositories\s*\{\s*\n\s*google\(\)\s*\n\s*mavenCentral\(\)\s*\n\s*gradlePluginPortal\(\)\s*\n\s*\}){2,}',
-              r'\1',
-              text
-          )
+      # ==========================================================
+      # 14. CLEAN OLD BUILD
+      # ==========================================================
 
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
-
-          print("settings.gradle repository configuration normalized.")
-          PY
-
-          fi
-
-          # --------------------------------------------------------
-          # settings.gradle.kts
-          # --------------------------------------------------------
-
-          if [ -f "$SETTINGS_KTS" ]; then
-
-            cp "$SETTINGS_KTS" "$SETTINGS_KTS.backup"
-
-            python3 - "$SETTINGS_KTS" <<'PY'
-          import sys
-
-          path = sys.argv[1]
-
-          with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
-
-          if "pluginManagement {" in text and "google()" not in text:
-              text = text.replace(
-                  "pluginManagement {",
-                  """pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }""",
-                  1
-              )
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
-
-          print("settings.gradle.kts checked.")
-          PY
-
-          fi
-
-          # --------------------------------------------------------
-          # build.gradle
-          # --------------------------------------------------------
-
-          BUILD="$ANDROID_DIR/build.gradle"
-
-          if [ -f "$BUILD" ]; then
-
-            cp "$BUILD" "$BUILD.backup"
-
-            python3 - "$BUILD" <<'PY'
-          import sys
-          import re
-
-          path = sys.argv[1]
-
-          with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
-
-          # Remove an existing allprojects repository block.
-          text = re.sub(
-              r'(?s)allprojects\s*\{\s*repositories\s*\{.*?\}\s*\}',
-              '',
-              text
-          )
-
-          # Add repositories in a safe Groovy block.
-          repo_block = r'''
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-                  maven {
-                      url = uri("https://storage.googleapis.com/download.flutter.io")
-                  }
-              }
-          }
-          '''
-
-          text = repo_block + "\n" + text
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
-
-          print("android/build.gradle repositories configured.")
-          PY
-
-          fi
-
-          echo "Repository configuration complete."
-
-      # ============================================================
-      # 16. CREATE R8 RULES
-      # ============================================================
-
-      - name: Configure R8
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APP_DIR="$PROJECT_DIR/android/app"
-
-          mkdir -p "$APP_DIR"
-
-          RULES="$APP_DIR/proguard-rules.pro"
-
-          touch "$RULES"
-
-          cat >> "$RULES" <<'EOF'
-
-          # ========================================================
-          # Flutter
-          # ========================================================
-
-          -keep class io.flutter.** { *; }
-          -keep class io.flutter.embedding.** { *; }
-
-          # ========================================================
-          # Google Play Core
-          # ========================================================
-
-          -keep class com.google.android.play.core.** { *; }
-          -dontwarn com.google.android.play.core.**
-
-          # ========================================================
-          # AndroidX
-          # ========================================================
-
-          -dontwarn androidx.**
-          -dontwarn kotlin.**
-
-          # ========================================================
-          # Media3
-          # ========================================================
-
-          -dontwarn androidx.media3.**
-
-          # ========================================================
-          # General annotations
-          # ========================================================
-
-          -keepattributes *Annotation*
-          -keepattributes Signature
-          -keepattributes InnerClasses
-          -keepattributes EnclosingMethod
-
-          EOF
-
-          echo "R8 rules created."
-
-      # ============================================================
-      # 17. ADD PLAY CORE IF NEEDED
-      # ============================================================
-
-      - name: Configure Play Core Dependency
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APP_GRADLE="$PROJECT_DIR/android/app/build.gradle"
-          APP_GRADLE_KTS="$PROJECT_DIR/android/app/build.gradle.kts"
-
-          if [ -f "$APP_GRADLE" ]; then
-
-            cp "$APP_GRADLE" "$APP_GRADLE.backup"
-
-            python3 - "$APP_GRADLE" <<'PY'
-          import sys
-          import re
-
-          path = sys.argv[1]
-
-          with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
-
-          dependency = "implementation 'com.google.android.play:core:1.10.3'"
-
-          if "com.google.android.play:core:" not in text:
-              match = re.search(
-                  r'dependencies\s*\{',
-                  text
-              )
-
-              if match:
-                  pos = match.end()
-
-                  text = (
-                      text[:pos]
-                      + "\n    "
-                      + dependency
-                      + "\n"
-                      + text[pos:]
-                  )
-              else:
-                  text += (
-                      "\n\ndependencies {\n"
-                      "    "
-                      + dependency
-                      + "\n}\n"
-                  )
-
-          # Ensure release does NOT depend on an unavailable custom
-          # R8 setup from the downloaded project.
-          text = re.sub(
-              r'(?s)release\s*\{\s*minifyEnabled\s+true',
-              'release {\n            minifyEnabled false',
-              text
-          )
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
-
-          print("build.gradle configured.")
-          PY
-
-          fi
-
-          if [ -f "$APP_GRADLE_KTS" ]; then
-
-            cp "$APP_GRADLE_KTS" "$APP_GRADLE_KTS.backup"
-
-            python3 - "$APP_GRADLE_KTS" <<'PY'
-          import sys
-          import re
-
-          path = sys.argv[1]
-
-          with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
-
-          dependency = 'implementation("com.google.android.play:core:1.10.3")'
-
-          if "com.google.android.play:core:" not in text:
-
-              match = re.search(
-                  r'dependencies\s*\{',
-                  text
-              )
-
-              if match:
-                  pos = match.end()
-
-                  text = (
-                      text[:pos]
-                      + "\n    "
-                      + dependency
-                      + "\n"
-                      + text[pos:]
-                  )
-              else:
-                  text += (
-                      "\n\ndependencies {\n"
-                      "    "
-                      + dependency
-                      + "\n"
-                      "}\n"
-                  )
-
-          text = re.sub(
-              r'(?s)release\s*\{\s*isMinifyEnabled\s*=\s*true',
-              'release {\n            isMinifyEnabled = false',
-              text
-          )
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
-
-          print("build.gradle.kts configured.")
-          PY
-
-          fi
-
-      # ============================================================
-      # 18. GRADLE WRAPPER
-      # ============================================================
-
-      - name: Prepare Gradle Wrapper
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ -f "$PROJECT_DIR/android/gradlew" ]; then
-            chmod +x "$PROJECT_DIR/android/gradlew"
-          fi
-
-          echo "Gradle wrapper prepared."
-
-      # ============================================================
-      # 19. VERIFY SETTINGS
-      # ============================================================
-
-      - name: Verify Android Configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ANDROID_DIR="$PROJECT_DIR/android"
-
-          echo "=============================================="
-          echo "ANDROID CONFIGURATION"
-          echo "=============================================="
-
-          echo ""
-          echo "local.properties:"
-          cat "$ANDROID_DIR/local.properties"
-
-          echo ""
-          echo "settings.gradle:"
-          if [ -f "$ANDROID_DIR/settings.gradle" ]; then
-            sed -n '1,180p' "$ANDROID_DIR/settings.gradle"
-          fi
-
-          echo ""
-          echo "build.gradle:"
-          if [ -f "$ANDROID_DIR/build.gradle" ]; then
-            sed -n '1,180p' "$ANDROID_DIR/build.gradle"
-          fi
-
-          echo ""
-          echo "Configuration verified."
-
-      # ============================================================
-      # 20. CLEAN
-      # ============================================================
-
-      - name: Flutter Clean
+      - name: Clean Flutter project
         shell: bash
         run: |
           set -euo pipefail
@@ -795,16 +362,14 @@ jobs:
           flutter clean
 
           rm -rf \
-            android/.gradle \
-            android/app/build \
-            build \
-            .dart_tool
+            .dart_tool \
+            build
 
-          echo "Clean complete."
+          echo "Project cleaned."
 
-      # ============================================================
-      # 21. PUB GET
-      # ============================================================
+      # ==========================================================
+      # 15. PUB GET
+      # ==========================================================
 
       - name: Flutter Pub Get
         shell: bash
@@ -815,59 +380,92 @@ jobs:
 
           flutter pub get
 
-          echo "Dependencies resolved."
+          echo "Dependencies installed."
 
-      # ============================================================
-      # 22. PRE-BUILD GRADLE CHECK
-      # ============================================================
+      # ==========================================================
+      # 16. DEPENDENCY CHECK
+      # ==========================================================
 
-      - name: Gradle Configuration Check
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR/android"
-
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-
-            ./gradlew \
-              --no-daemon \
-              --stacktrace \
-              help
-          fi
-
-          echo "Gradle configuration OK."
-
-      # ============================================================
-      # 23. BUILD APK
-      # ============================================================
-
-      - name: Build InterShare APK
+      - name: Flutter Dependency Check
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$PROJECT_DIR"
 
-          echo ""
-          echo "=============================================="
-          echo "        INTERSHARE APK RELEASE BUILD"
-          echo "=============================================="
-          echo ""
+          flutter pub deps
+
+      # ==========================================================
+      # 17. ANALYZE
+      # ==========================================================
+
+      - name: Flutter Analyze
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          flutter analyze
+
+          echo "Flutter analyze passed."
+
+      # ==========================================================
+      # 18. TEST
+      # ==========================================================
+
+      - name: Flutter Test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          flutter test
+
+          echo "Flutter tests passed."
+
+      # ==========================================================
+      # 19. GRADLE VERSION CHECK
+      # ==========================================================
+
+      - name: Verify Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR/android"
+
+          chmod +x gradlew
+
+          ./gradlew --version
+
+      # ==========================================================
+      # 20. BUILD APK
+      # ==========================================================
+
+      - name: Build InterShare Release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          echo "=========================================="
+          echo "BUILDING INTERSHARE RELEASE APK"
+          echo "=========================================="
 
           flutter build apk \
             --release \
-            --no-tree-shake-icons
+            --verbose
 
-          echo ""
-          echo "=============================================="
-          echo "             BUILD SUCCESS"
-          echo "=============================================="
+          echo "=========================================="
+          echo "BUILD SUCCESS"
+          echo "=========================================="
 
-      # ============================================================
-      # 24. FIND APK
-      # ============================================================
+      # ==========================================================
+      # 21. FIND APK
+      # ==========================================================
 
       - name: Find APK
         shell: bash
@@ -879,166 +477,165 @@ jobs:
           if [ -f "$DEFAULT_APK" ]; then
             APK_PATH="$DEFAULT_APK"
           else
-            APK_PATH="$(
-              find "$PROJECT_DIR/build" \
-                -type f \
-                -name "*.apk" \
-                | head -n 1
-            )"
+            APK_PATH="$(find "$PROJECT_DIR/build" \
+              -type f \
+              -name "*.apk" \
+              | head -n 1)"
           fi
 
-          if [ -z "${APK_PATH:-}" ] || [ ! -f "$APK_PATH" ]; then
+          if [ -z "$APK_PATH" ]; then
             echo "ERROR: APK tidak ditemukan."
             exit 1
           fi
 
-          APK_SIZE="$(stat -c%s "$APK_PATH")"
-          APK_MB="$((APK_SIZE / 1024 / 1024))"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "ERROR: APK path invalid."
+            exit 1
+          fi
+
+          APK_SIZE=$(stat -c%s "$APK_PATH")
+          APK_MB=$(awk "BEGIN {printf \"%.2f\", $APK_SIZE/1024/1024}")
 
           echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
-          echo "APK_MB=$APK_MB" >> "$GITHUB_ENV"
+          echo "APK_SIZE_MB=$APK_MB" >> "$GITHUB_ENV"
 
-          echo ""
-          echo "=============================================="
-          echo "APK FOUND"
-          echo "=============================================="
-          echo "Path: $APK_PATH"
-          echo "Size: ${APK_MB} MB"
+          echo "APK:"
+          echo "$APK_PATH"
 
-      # ============================================================
-      # 25. VERIFY APK
-      # ============================================================
+          echo "Size:"
+          echo "${APK_MB} MB"
+
+      # ==========================================================
+      # 22. VERIFY APK
+      # ==========================================================
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -f "$APK_PATH" ]; then
-            echo "ERROR: APK tidak ada."
+          test -f "$APK_PATH"
+
+          file "$APK_PATH"
+
+          APK_SIZE=$(stat -c%s "$APK_PATH")
+
+          if [ "$APK_SIZE" -le 100000 ]; then
+            echo "ERROR: APK terlalu kecil / kemungkinan corrupt."
             exit 1
           fi
 
-          file "$APK_PATH"
-          ls -lh "$APK_PATH"
+          echo "APK validation passed."
 
-          echo "APK verified."
+      # ==========================================================
+      # 23. UPLOAD APK ARTIFACT
+      # ==========================================================
 
-      # ============================================================
-      # 26. UPLOAD ARTIFACT
-      # ============================================================
-
-      - name: Upload APK
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: InterShare-release
+          name: InterShare-release-apk
           path: ${{ env.APK_PATH }}
           retention-days: 14
           if-no-files-found: error
 
-      # ============================================================
-      # 27. TELEGRAM RESULT
-      # ============================================================
+      # ==========================================================
+      # 24. SEND BUILD MESSAGE TO TELEGRAM
+      # ==========================================================
 
-      - name: Send Telegram Result
-        if: success()
+      - name: Send Build Result to Telegram
         shell: bash
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          OWNER_ID: ${{ secrets.OWNER_CHAT_ID }}
         run: |
           set -euo pipefail
 
-          if [ -z "${BOT_TOKEN:-}" ] || [ -z "${OWNER_ID:-}" ]; then
-            echo "Telegram credentials tidak tersedia."
-            exit 0
+          BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          OWNER_ID="${{ secrets.OWNER_CHAT_ID }}"
+
+          if [ -z "$BOT_TOKEN" ]; then
+            echo "ERROR: TELEGRAM_BOT_TOKEN belum diset."
+            exit 1
           fi
 
-          MESSAGE="🎉 InterShare APK berhasil dibuat!
+          if [ -z "$OWNER_ID" ]; then
+            echo "ERROR: OWNER_CHAT_ID belum diset."
+            exit 1
+          fi
 
-          📱 InterShare
-          📦 com.intershare.marnommk
-          🔢 Version: 1.0.0+1
-          📏 Size: ${APK_MB} MB
+          REPO="${GITHUB_REPOSITORY}"
+          RUN_ID="${GITHUB_RUN_ID}"
 
-          ✅ Release build berhasil."
+          MESSAGE="✅ InterShare APK Build Berhasil
+
+          📦 APK: ${APK_SIZE_MB} MB
+          📱 Package: com.intershare.marnommk
+          🔧 Flutter: ${FLUTTER_VERSION}
+          ☕ Java: ${JAVA_VERSION}
+          🤖 Android SDK: 36
+          🏗️ Gradle: 8.13
+          🔌 AGP: 8.13.2
+          🆔 Build: ${RUN_ID}
+          📁 Repository: ${REPO}
+
+          APK sudah tersedia sebagai GitHub Actions Artifact."
 
           curl \
             --fail \
             --silent \
             --show-error \
             --retry 3 \
-            --connect-timeout 30 \
-            --max-time 120 \
+            --retry-all-errors \
             -X POST \
             "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${OWNER_ID}" \
             --data-urlencode "text=${MESSAGE}"
 
-          echo "Telegram result sent."
+          echo "Telegram build message sent."
 
-      # ============================================================
-      # 28. SEND APK
-      # ============================================================
+      # ==========================================================
+      # 25. SEND APK TO TELEGRAM
+      # ==========================================================
 
       - name: Send APK to Telegram
-        if: success()
         shell: bash
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          OWNER_ID: ${{ secrets.OWNER_CHAT_ID }}
         run: |
           set -euo pipefail
 
-          if [ -z "${BOT_TOKEN:-}" ] || [ -z "${OWNER_ID:-}" ]; then
-            echo "Telegram credentials tidak tersedia."
-            exit 0
+          BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          OWNER_ID="${{ secrets.OWNER_CHAT_ID }}"
+
+          if [ -z "$BOT_TOKEN" ]; then
+            echo "ERROR: TELEGRAM_BOT_TOKEN belum diset."
+            exit 1
           fi
+
+          if [ -z "$OWNER_ID" ]; then
+            echo "ERROR: OWNER_CHAT_ID belum diset."
+            exit 1
+          fi
+
+          if [ ! -f "$APK_PATH" ]; then
+            echo "ERROR: APK tidak ditemukan."
+            exit 1
+          fi
+
+          echo "Uploading APK to Telegram..."
 
           curl \
             --fail \
             --silent \
             --show-error \
             --retry 3 \
+            --retry-all-errors \
             --connect-timeout 30 \
             --max-time 900 \
             -X POST \
             "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
             -F "chat_id=${OWNER_ID}" \
             -F "document=@${APK_PATH}" \
-            -F "caption=🎉 InterShare Release APK"
+            -F "caption=🎉 InterShare Release APK 
+            📦 Size: ${APK_SIZE_MB} MB
+            📱 Package: com.intershare.marnommk
+            🔧 Flutter: ${FLUTTER_VERSION}
+            🤖 Android SDK: 36"
 
-          echo "APK sent to Telegram."
-
-      # ============================================================
-      # 29. FAILURE NOTIFICATION
-      # ============================================================
-
-      - name: Send Build Failure
-        if: failure()
-        shell: bash
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          OWNER_ID: ${{ secrets.OWNER_CHAT_ID }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${BOT_TOKEN:-}" ] || [ -z "${OWNER_ID:-}" ]; then
-            exit 0
-          fi
-
-          curl \
-            --fail \
-            --silent \
-            --show-error \
-            --retry 2 \
-            --connect-timeout 30 \
-            --max-time 120 \
-            -X POST \
-            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            --data-urlencode \
-            "chat_id=${OWNER_ID}" \
-            --data-urlencode \
-            "text=❌ InterShare APK build gagal. Cek log GitHub Actions."
-
-          echo "Failure notification sent."
+          echo "APK successfully sent to Telegram."
