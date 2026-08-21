@@ -1,641 +1,73 @@
-name: InterShare - Build APK from ZIP
+name: freevpsmarno
 
 on:
   workflow_dispatch:
-    inputs:
-      zip_url:
-        description: "URL file ZIP (raw/direct download link)"
-        required: true
-        type: string
-
-      chat_id:
-        description: "Chat ID Telegram"
-        required: true
-        type: string
-
-permissions:
-  contents: read
-
-env:
-  # WAJIB cocok dengan project InterShare_Full_Project.zip
-  FLUTTER_VERSION: "3.47.0"
-  JAVA_VERSION: "17"
-
-  # Android project InterShare:
-  # AGP 8.13.2
-  # Gradle 8.13
-  # Kotlin 2.3.0
-  # compileSdk 36
-  # targetSdk 36
 
 jobs:
-  build:
-    name: Build InterShare APK
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
+  vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4320
+    name: FREE VPS MARNO
 
     steps:
-
-      # ==========================================================
-      # 1. VERIFY OWNER
-      # ==========================================================
-
-      - name: Verify Owner ID
-        shell: bash
+      - name: Setup hostname & root prompt
         run: |
-          set -euo pipefail
+          echo "freevpsmarno" | sudo tee /etc/hostname
+          sudo hostnamectl set-hostname freevpsmarno
+          sudo sed -i 's/127.0.1.1.*/127.0.1.1 freevpsmarno/' /etc/hosts
+          sudo bash -c 'echo "export PS1=\"\u@freevpsmarno:\w# \"" > /root/.bashrc'
 
-          OWNER_ID="${{ secrets.OWNER_CHAT_ID }}"
-          CHAT_ID="${{ github.event.inputs.chat_id }}"
-
-          if [ -z "$OWNER_ID" ]; then
-            echo "ERROR: Secret OWNER_CHAT_ID belum diset."
-            exit 1
-          fi
-
-          if [ -z "$CHAT_ID" ]; then
-            echo "ERROR: chat_id kosong."
-            exit 1
-          fi
-
-          if [ "$OWNER_ID" != "$CHAT_ID" ]; then
-            echo "ERROR: Unauthorized."
-            exit 1
-          fi
-
-          echo "Owner verified."
-
-      # ==========================================================
-      # 2. CHECKOUT
-      # ==========================================================
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # ==========================================================
-      # 3. JAVA 17
-      # ==========================================================
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-          cache: gradle
-
-      # ==========================================================
-      # 4. ANDROID SDK
-      # ==========================================================
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      # ==========================================================
-      # 5. INSTALL SYSTEM TOOLS
-      # ==========================================================
-
-      - name: Install build tools
-        shell: bash
+      - name: Detect VPS Specs & Region
         run: |
-          set -euo pipefail
+          VPS_CITY=$(curl -s https://ipinfo.io/city)
+          VPS_REGION=$(curl -s https://ipinfo.io/region)
+          VPS_COUNTRY=$(curl -s https://ipinfo.io/country)
+          VPS_ORG=$(curl -s https://ipinfo.io/org)
+          VPS_CPU_MODEL=$(lscpu | grep "Model name" | sed 's/Model name:[ \t]*//')
+          VPS_CPU_CORES=$(lscpu | grep "^CPU(s):" | awk '{print $2}')
+          VPS_RAM=$(free -h | grep Mem | awk '{print $2}')
+          VPS_OS=$(lsb_release -ds)
+          VPS_HOSTNAME=$(hostname)
 
-          sudo apt-get update
+          echo "VPS_CITY=$VPS_CITY" >> $GITHUB_ENV
+          echo "VPS_REGION=$VPS_REGION" >> $GITHUB_ENV
+          echo "VPS_COUNTRY=$VPS_COUNTRY" >> $GITHUB_ENV
+          echo "VPS_ORG=$VPS_ORG" >> $GITHUB_ENV
+          echo "VPS_CPU_MODEL=$VPS_CPU_MODEL" >> $GITHUB_ENV
+          echo "VPS_CPU_CORES=$VPS_CPU_CORES" >> $GITHUB_ENV
+          echo "VPS_RAM=$VPS_RAM" >> $GITHUB_ENV
+          echo "VPS_OS=$VPS_OS" >> $GITHUB_ENV
+          echo "VPS_HOSTNAME=$VPS_HOSTNAME" >> $GITHUB_ENV
 
-          sudo apt-get install -y \
-            unzip \
-            curl \
-            file \
-            zip
-
-          echo "Build tools installed."
-
-      # ==========================================================
-      # 6. INSTALL REQUIRED ANDROID SDK
-      # ==========================================================
-
-      - name: Install Android SDK 36
-        shell: bash
+      - name: Install tmate
         run: |
-          set -euo pipefail
+          sudo apt update
+          sudo apt install -y tmate curl lsb-release
 
-          yes | sdkmanager --licenses >/dev/null || true
-
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"
-
-          echo "Android SDK 36 installed."
-
-      # ==========================================================
-      # 7. SETUP FLUTTER
-      # ==========================================================
-
-      - name: Setup Flutter 3.47.0
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
-      # ==========================================================
-      # 8. FLUTTER DIAGNOSTICS
-      # ==========================================================
-
-      - name: Flutter diagnostics
-        shell: bash
+      - name: Start tmate session
         run: |
-          set -euo pipefail
+          export TERM=xterm
+          sudo tmate -S /tmp/tmate.sock new-session -d -c /root >/dev/null 2>&1
+          sudo tmate -S /tmp/tmate.sock wait tmate-ready
+          SSH_CMD=$(sudo tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          WEB_CMD=$(sudo tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
+          echo "SSH_CMD=$SSH_CMD" >> $GITHUB_ENV
+          echo "WEB_CMD=$WEB_CMD" >> $GITHUB_ENV
 
-          flutter --version
-          dart --version
-
-          echo "Flutter:"
-          flutter doctor -v
-
-      # ==========================================================
-      # 9. DOWNLOAD ZIP
-      # ==========================================================
-
-      - name: Download InterShare ZIP
-        shell: bash
+      - name: Send VPS info to Telegram
         run: |
-          set -euo pipefail
+          source $GITHUB_ENV
+          BOT_TOKEN="8455335513:AAFD2QUku9-fxFpz9oIF33IFbYHDj08P7Yk"
+          CHAT_ID="-1003046961134"
 
-          ZIP_URL="${{ github.event.inputs.zip_url }}"
+          MESSAGE=$(printf "✅ Sukses create Vps\nʙᴇʀɪᴋᴜᴛ ᴅᴇᴛᴀɪʟ Vᴘꜱ:\n\n🖥️ Hostname: %s\n⏰ Masa Aktif : 7 Jam\n📦 Spec: Ram %s Core %s\n💿 OS: %s\n🌍 Region: %s, %s, %s\n\n📡 ʟᴏɢɪɴ ᴠᴘꜱ:\n%s\n\n⚠️ 𝗧.𝗢.𝗦 𝗩𝗣𝗦:\n• ɴᴏ ʜᴀᴄᴋɪɴɢ\n• ɴᴏ ᴍɪɴɪɴɢ\n• ɴᴏ ᴛᴏʀʀᴇɴᴛ\n• ɴᴏ ᴏᴠᴇʀʟᴏᴀᴅ (100%% ᴄᴘᴜ)\n• ɴᴏ ᴅᴅᴏs\n• ɪɴᴛɪɴʏᴀ: ᴊᴀɴɢᴀɴ ᴅɪɢᴜɴᴀᴋᴀɴ ᴜɴᴛᴜᴋ ᴀᴋᴛɪꜰɪᴛᴀꜱ ɪʟᴇɢᴀʟ ᴀᴘᴀ ᴘᴜɴ\n\nDev By Marno" \
+          "$VPS_HOSTNAME" "$VPS_RAM" "$VPS_CPU_CORES" "$VPS_OS" "$VPS_CITY" "$VPS_REGION" "$VPS_COUNTRY" "$SSH_CMD")
 
-          if [ -z "$ZIP_URL" ]; then
-            echo "ERROR: ZIP URL kosong."
-            exit 1
-          fi
+          curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+               -d chat_id="$CHAT_ID" \
+               -d text="$MESSAGE"
 
-          # Convert GitHub blob URL -> raw URL
-          if [[ "$ZIP_URL" == *"github.com"* && "$ZIP_URL" == *"/blob/"* ]]; then
-            ZIP_URL="${ZIP_URL/\/blob\//\/raw\/}"
-          fi
-
-          echo "Downloading project..."
-
-          curl \
-            --location \
-            --fail \
-            --show-error \
-            --silent \
-            --retry 5 \
-            --retry-all-errors \
-            --retry-delay 3 \
-            --connect-timeout 30 \
-            --max-time 900 \
-            "$ZIP_URL" \
-            --output project.zip
-
-          if [ ! -s project.zip ]; then
-            echo "ERROR: project.zip kosong."
-            exit 1
-          fi
-
-          echo "ZIP downloaded successfully."
-
-          echo "ZIP size:"
-          du -h project.zip
-
-      # ==========================================================
-      # 10. VALIDATE ZIP
-      # ==========================================================
-
-      - name: Validate ZIP
-        shell: bash
+      - name: Keep VPS alive silently
         run: |
-          set -euo pipefail
-
-          unzip -t project.zip >/dev/null
-
-          echo "ZIP integrity OK."
-
-      # ==========================================================
-      # 11. EXTRACT
-      # ==========================================================
-
-      - name: Extract Project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf flutter_project
-          mkdir -p flutter_project
-
-          unzip -q project.zip -d flutter_project
-
-          echo "Project extracted."
-
-          echo "Top-level files:"
-          find flutter_project -maxdepth 3 -type f | sort | head -100
-
-      # ==========================================================
-      # 12. DETECT FLUTTER PROJECT
-      # ==========================================================
-
-      - name: Detect Flutter Project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          PUBSPEC="$(find "$GITHUB_WORKSPACE/flutter_project" \
-            -type f \
-            -name "pubspec.yaml" \
-            -not -path "*/.dart_tool/*" \
-            -not -path "*/build/*" \
-            | head -n 1)"
-
-          if [ -z "$PUBSPEC" ]; then
-            echo "ERROR: pubspec.yaml tidak ditemukan."
-            exit 1
-          fi
-
-          PROJECT_DIR="$(dirname "$PUBSPEC")"
-
-          if [ ! -f "$PROJECT_DIR/pubspec.yaml" ]; then
-            echo "ERROR: pubspec.yaml invalid."
-            exit 1
-          fi
-
-          if [ ! -d "$PROJECT_DIR/android" ]; then
-            echo "ERROR: folder android tidak ditemukan."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/android/settings.gradle" ]; then
-            echo "ERROR: android/settings.gradle tidak ditemukan."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/android/app/build.gradle" ]; then
-            echo "ERROR: android/app/build.gradle tidak ditemukan."
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo "Flutter project detected:"
-          echo "$PROJECT_DIR"
-
-      # ==========================================================
-      # 13. VERIFY INTERSHARE PROJECT
-      # ==========================================================
-
-      - name: Verify InterShare configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          echo "Checking applicationId..."
-
-          grep -q 'applicationId = "com.intershare.marnommk"' \
-            android/app/build.gradle
-
-          echo "applicationId OK."
-
-          echo "Checking namespace..."
-
-          grep -q 'namespace = "com.intershare.marnommk"' \
-            android/app/build.gradle
-
-          echo "namespace OK."
-
-          echo "Checking compileSdk..."
-
-          grep -q 'compileSdk = 36' \
-            android/app/build.gradle
-
-          echo "compileSdk OK."
-
-          echo "Checking targetSdk..."
-
-          grep -q 'targetSdk = 36' \
-            android/app/build.gradle
-
-          echo "targetSdk OK."
-
-          echo "Checking Gradle wrapper..."
-
-          grep -q 'gradle-8.13-' \
-            android/gradle/wrapper/gradle-wrapper.properties
-
-          echo "Gradle 8.13 OK."
-
-          echo "Checking AGP..."
-
-          grep -q 'com.android.application" version "8.13.2"' \
-            android/settings.gradle
-
-          echo "AGP 8.13.2 OK."
-
-          echo "Checking Kotlin..."
-
-          grep -q 'org.jetbrains.kotlin.android" version "2.3.0"' \
-            android/settings.gradle
-
-          echo "Kotlin 2.3.0 OK."
-
-          echo "Checking assets..."
-
-          test -f assets/intershare.mp4
-          test -f assets/app_icon.png
-
-          echo "Assets OK."
-
-          echo "InterShare project validation passed."
-
-      # ==========================================================
-      # 14. CLEAN OLD BUILD
-      # ==========================================================
-
-      - name: Clean Flutter project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          flutter clean
-
-          rm -rf \
-            .dart_tool \
-            build
-
-          echo "Project cleaned."
-
-      # ==========================================================
-      # 15. PUB GET
-      # ==========================================================
-
-      - name: Flutter Pub Get
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          flutter pub get
-
-          echo "Dependencies installed."
-
-      # ==========================================================
-      # 16. DEPENDENCY CHECK
-      # ==========================================================
-
-      - name: Flutter Dependency Check
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          flutter pub deps
-
-      # ==========================================================
-      # 17. ANALYZE
-      # ==========================================================
-
-      - name: Flutter Analyze
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          flutter analyze
-
-          echo "Flutter analyze passed."
-
-      # ==========================================================
-      # 18. TEST
-      # ==========================================================
-
-      - name: Flutter Test
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          flutter test
-
-          echo "Flutter tests passed."
-
-      # ==========================================================
-      # 19. GRADLE VERSION CHECK
-      # ==========================================================
-
-      - name: Verify Gradle
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR/android"
-
-          chmod +x gradlew
-
-          ./gradlew --version
-
-      # ==========================================================
-      # 20. BUILD APK
-      # ==========================================================
-
-      - name: Build InterShare Release APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          echo "=========================================="
-          echo "BUILDING INTERSHARE RELEASE APK"
-          echo "=========================================="
-
-          flutter build apk \
-            --release \
-            --verbose
-
-          echo "=========================================="
-          echo "BUILD SUCCESS"
-          echo "=========================================="
-
-      # ==========================================================
-      # 21. FIND APK
-      # ==========================================================
-
-      - name: Find APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          DEFAULT_APK="$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk"
-
-          if [ -f "$DEFAULT_APK" ]; then
-            APK_PATH="$DEFAULT_APK"
-          else
-            APK_PATH="$(find "$PROJECT_DIR/build" \
-              -type f \
-              -name "*.apk" \
-              | head -n 1)"
-          fi
-
-          if [ -z "$APK_PATH" ]; then
-            echo "ERROR: APK tidak ditemukan."
-            exit 1
-          fi
-
-          if [ ! -f "$APK_PATH" ]; then
-            echo "ERROR: APK path invalid."
-            exit 1
-          fi
-
-          APK_SIZE=$(stat -c%s "$APK_PATH")
-          APK_MB=$(awk "BEGIN {printf \"%.2f\", $APK_SIZE/1024/1024}")
-
-          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
-          echo "APK_SIZE_MB=$APK_MB" >> "$GITHUB_ENV"
-
-          echo "APK:"
-          echo "$APK_PATH"
-
-          echo "Size:"
-          echo "${APK_MB} MB"
-
-      # ==========================================================
-      # 22. VERIFY APK
-      # ==========================================================
-
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f "$APK_PATH"
-
-          file "$APK_PATH"
-
-          APK_SIZE=$(stat -c%s "$APK_PATH")
-
-          if [ "$APK_SIZE" -le 100000 ]; then
-            echo "ERROR: APK terlalu kecil / kemungkinan corrupt."
-            exit 1
-          fi
-
-          echo "APK validation passed."
-
-      # ==========================================================
-      # 23. UPLOAD APK ARTIFACT
-      # ==========================================================
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: InterShare-release-apk
-          path: ${{ env.APK_PATH }}
-          retention-days: 14
-          if-no-files-found: error
-
-      # ==========================================================
-      # 24. SEND BUILD MESSAGE TO TELEGRAM
-      # ==========================================================
-
-      - name: Send Build Result to Telegram
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
-          OWNER_ID="${{ secrets.OWNER_CHAT_ID }}"
-
-          if [ -z "$BOT_TOKEN" ]; then
-            echo "ERROR: TELEGRAM_BOT_TOKEN belum diset."
-            exit 1
-          fi
-
-          if [ -z "$OWNER_ID" ]; then
-            echo "ERROR: OWNER_CHAT_ID belum diset."
-            exit 1
-          fi
-
-          REPO="${GITHUB_REPOSITORY}"
-          RUN_ID="${GITHUB_RUN_ID}"
-
-          MESSAGE="✅ InterShare APK Build Berhasil
-
-          📦 APK: ${APK_SIZE_MB} MB
-          📱 Package: com.intershare.marnommk
-          🔧 Flutter: ${FLUTTER_VERSION}
-          ☕ Java: ${JAVA_VERSION}
-          🤖 Android SDK: 36
-          🏗️ Gradle: 8.13
-          🔌 AGP: 8.13.2
-          🆔 Build: ${RUN_ID}
-          📁 Repository: ${REPO}
-
-          APK sudah tersedia sebagai GitHub Actions Artifact."
-
-          curl \
-            --fail \
-            --silent \
-            --show-error \
-            --retry 3 \
-            --retry-all-errors \
-            -X POST \
-            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${OWNER_ID}" \
-            --data-urlencode "text=${MESSAGE}"
-
-          echo "Telegram build message sent."
-
-      # ==========================================================
-      # 25. SEND APK TO TELEGRAM
-      # ==========================================================
-
-      - name: Send APK to Telegram
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
-          OWNER_ID="${{ secrets.OWNER_CHAT_ID }}"
-
-          if [ -z "$BOT_TOKEN" ]; then
-            echo "ERROR: TELEGRAM_BOT_TOKEN belum diset."
-            exit 1
-          fi
-
-          if [ -z "$OWNER_ID" ]; then
-            echo "ERROR: OWNER_CHAT_ID belum diset."
-            exit 1
-          fi
-
-          if [ ! -f "$APK_PATH" ]; then
-            echo "ERROR: APK tidak ditemukan."
-            exit 1
-          fi
-
-          echo "Uploading APK to Telegram..."
-
-          curl \
-            --fail \
-            --silent \
-            --show-error \
-            --retry 3 \
-            --retry-all-errors \
-            --connect-timeout 30 \
-            --max-time 900 \
-            -X POST \
-            "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
-            -F "chat_id=${OWNER_ID}" \
-            -F "document=@${APK_PATH}" \
-            -F "caption=🎉 InterShare Release APK 
-            📦 Size: ${APK_SIZE_MB} MB
-            📱 Package: com.intershare.marnommk
-            🔧 Flutter: ${FLUTTER_VERSION}
-            🤖 Android SDK: 36"
-
-          echo "APK successfully sent to Telegram."
+          echo "🔥 VPS will stay alive until GitHub forces shutdown 🔥"
+          while true; do sleep 300; done
