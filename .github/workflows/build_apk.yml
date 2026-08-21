@@ -23,7 +23,7 @@ jobs:
       contents: read
 
     env:
-      FLUTTER_VERSION: "3.27.0"
+      FLUTTER_VERSION: "3.47.1"
       JAVA_VERSION: "17"
 
     steps:
@@ -76,13 +76,13 @@ jobs:
           cache: gradle
 
       # ============================================================
-      # 4. FLUTTER
+      # 4. FLUTTER 3.47.1
       # ============================================================
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
+          flutter-version: "3.47.1"
           channel: stable
           cache: true
 
@@ -94,10 +94,10 @@ jobs:
         uses: android-actions/setup-android@v3
 
       # ============================================================
-      # 6. TOOLS
+      # 6. INSTALL BUILD TOOLS
       # ============================================================
 
-      - name: Install Tools
+      - name: Install Build Tools
         shell: bash
         run: |
           set -e
@@ -112,7 +112,7 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-          echo "✅ Build environment ready."
+          echo "✅ Build tools ready."
 
       # ============================================================
       # 7. DOWNLOAD ZIP
@@ -134,7 +134,7 @@ jobs:
             ZIP_URL="${ZIP_URL/\/blob\//\/raw\/}"
           fi
 
-          echo "📥 Downloading project..."
+          echo "📥 Downloading project ZIP..."
 
           curl \
             --location \
@@ -148,7 +148,10 @@ jobs:
             "$ZIP_URL" \
             --output project.zip
 
-          test -s project.zip
+          if [ ! -s project.zip ]; then
+            echo "❌ ZIP kosong."
+            exit 1
+          fi
 
           echo "✅ ZIP downloaded."
           du -h project.zip
@@ -167,10 +170,10 @@ jobs:
 
           unzip -q project.zip -d flutter_project
 
-          echo "✅ ZIP extracted."
+          echo "✅ Project extracted."
 
       # ============================================================
-      # 9. DETECT PUBSPEC
+      # 9. DETECT FLUTTER PROJECT
       # ============================================================
 
       - name: Detect Flutter Project
@@ -200,10 +203,21 @@ jobs:
           echo "$PROJECT_DIR"
 
       # ============================================================
-      # 10. CHECK MANIFEST
+      # 10. SHOW FLUTTER / DART VERSION
       # ============================================================
 
-      - name: Prepare Android Manifest
+      - name: Check Flutter Version
+        shell: bash
+        run: |
+          set -e
+
+          flutter --version
+
+      # ============================================================
+      # 11. VALIDATE MANIFEST
+      # ============================================================
+
+      - name: Validate Android Manifest
         shell: bash
         run: |
           set -e
@@ -211,14 +225,10 @@ jobs:
           MANIFEST="$PROJECT_DIR/android/app/src/main/AndroidManifest.xml"
 
           if [ ! -f "$MANIFEST" ]; then
-            echo "❌ AndroidManifest.xml tidak ditemukan:"
-            echo "$MANIFEST"
+            echo "❌ AndroidManifest.xml tidak ditemukan."
             exit 1
           fi
 
-          echo "📄 Checking AndroidManifest.xml"
-
-          # Pastikan XML dapat diparse sebelum melakukan perubahan.
           python3 - "$MANIFEST" <<'PY'
           import sys
           import xml.etree.ElementTree as ET
@@ -229,13 +239,13 @@ jobs:
               ET.parse(path)
               print("✅ AndroidManifest.xml valid.")
           except Exception as e:
-              print("❌ AndroidManifest.xml invalid:")
+              print("❌ AndroidManifest.xml invalid.")
               print(e)
               sys.exit(1)
           PY
 
       # ============================================================
-      # 11. ENSURE FLUTTER EMBEDDING V2
+      # 12. ENSURE FLUTTER EMBEDDING V2
       # ============================================================
 
       - name: Ensure Flutter Embedding V2
@@ -251,53 +261,48 @@ jobs:
 
           path = sys.argv[1]
 
+          android_ns = "http://schemas.android.com/apk/res/android"
+
+          ET.register_namespace("android", android_ns)
+
           tree = ET.parse(path)
           root = tree.getroot()
 
           application = root.find("application")
 
           if application is None:
-              raise SystemExit(
-                  "❌ <application> tidak ditemukan di AndroidManifest.xml"
-              )
+              print("❌ <application> tidak ditemukan.")
+              sys.exit(1)
 
-          ANDROID_NS = "http://schemas.android.com/apk/res/android"
-
-          exists = False
+          found = False
 
           for child in application:
               if child.tag.endswith("meta-data"):
                   name = child.attrib.get(
-                      "{%s}name" % ANDROID_NS
+                      "{%s}name" % android_ns
                   )
 
                   if name == "flutterEmbedding":
-                      exists = True
-
                       child.set(
-                          "{%s}value" % ANDROID_NS,
+                          "{%s}value" % android_ns,
                           "2"
                       )
+                      found = True
 
-          if not exists:
+          if not found:
               metadata = ET.Element("meta-data")
 
               metadata.set(
-                  "{%s}name" % ANDROID_NS,
+                  "{%s}name" % android_ns,
                   "flutterEmbedding"
               )
 
               metadata.set(
-                  "{%s}value" % ANDROID_NS,
+                  "{%s}value" % android_ns,
                   "2"
               )
 
               application.insert(0, metadata)
-
-          ET.register_namespace(
-              "android",
-              ANDROID_NS
-          )
 
           tree.write(
               path,
@@ -305,33 +310,7 @@ jobs:
               xml_declaration=True
           )
 
-          print("✅ Flutter Android Embedding V2 configured.")
-          PY
-
-      # ============================================================
-      # 12. VALIDATE MANIFEST AGAIN
-      # ============================================================
-
-      - name: Validate Android Manifest
-        shell: bash
-        run: |
-          set -e
-
-          MANIFEST="$PROJECT_DIR/android/app/src/main/AndroidManifest.xml"
-
-          python3 - "$MANIFEST" <<'PY'
-          import sys
-          import xml.etree.ElementTree as ET
-
-          path = sys.argv[1]
-
-          try:
-              ET.parse(path)
-              print("✅ AndroidManifest.xml valid after patch.")
-          except Exception as e:
-              print("❌ Manifest masih invalid:")
-              print(e)
-              sys.exit(1)
+          print("✅ Flutter Embedding V2 configured.")
           PY
 
       # ============================================================
@@ -359,7 +338,7 @@ jobs:
       # 14. GRADLE PERMISSION
       # ============================================================
 
-      - name: Prepare Gradle Wrapper
+      - name: Prepare Gradle
         shell: bash
         run: |
           set -e
@@ -367,8 +346,6 @@ jobs:
           if [ -f "$PROJECT_DIR/android/gradlew" ]; then
             chmod +x "$PROJECT_DIR/android/gradlew"
           fi
-
-          echo "✅ Gradle wrapper prepared."
 
       # ============================================================
       # 15. PUB GET
@@ -386,7 +363,7 @@ jobs:
           echo "✅ Dependencies installed."
 
       # ============================================================
-      # 16. DIRECT BUILD
+      # 16. BUILD APK
       # ============================================================
 
       - name: Build APK Release
@@ -437,8 +414,7 @@ jobs:
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
           echo "APK_MB=$MB" >> "$GITHUB_ENV"
 
-          echo "📦 APK:"
-          echo "$APK"
+          echo "📦 APK: $APK"
           echo "📏 Size: ${MB} MB"
 
       # ============================================================
@@ -473,10 +449,10 @@ jobs:
 
           TEXT="🎉 InterShare APK berhasil dibuat!
 
-          📱 InterShare
-          📦 com.intershare.marnommk
-          🔢 1.0.0+1
-          📏 ${APK_MB} MB
+          📱 App: InterShare
+          📦 Package: com.intershare.marnommk
+          🔢 Version: 1.0.0+1
+          📏 Size: ${APK_MB} MB
 
           ✅ Release build berhasil."
 
@@ -491,7 +467,7 @@ jobs:
             --data-urlencode "text=${TEXT}"
 
       # ============================================================
-      # 20. SEND APK TELEGRAM
+      # 20. SEND APK TO TELEGRAM
       # ============================================================
 
       - name: Send APK to Telegram
@@ -524,7 +500,7 @@ jobs:
           echo "✅ APK sent to Telegram."
 
       # ============================================================
-      # 21. FAILURE MESSAGE
+      # 21. FAILURE NOTIFICATION
       # ============================================================
 
       - name: Send Build Failure
@@ -548,6 +524,6 @@ jobs:
             -X POST \
             "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${OWNER_ID}" \
-            --data-urlencode "text=❌ InterShare APK build gagal. Cek GitHub Actions log."
+            --data-urlencode "text=❌ InterShare APK build gagal. Cek log GitHub Actions."
 
           echo "❌ Failure notification sent."
