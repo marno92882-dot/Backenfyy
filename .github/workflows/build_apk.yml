@@ -97,8 +97,8 @@ jobs:
 
           sdkmanager \
             "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       # ============================================================
       # 6. DOWNLOAD ZIP
@@ -172,29 +172,141 @@ jobs:
           echo "$PROJECT_DIR"
 
       # ============================================================
-      # 9. BASIC CONFIG
+      # 9. AUTO-FIX ANDROID CONFIGURATION
       # ============================================================
 
-      - name: Prepare Project
+      - name: Fix Android Configuration
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          chmod +x android/gradlew || true
+          echo "======================================"
+          echo "FIXING ANDROID CONFIGURATION"
+          echo "======================================"
 
+          # ---- Fix gradle.properties ----
+          echo "Fixing gradle.properties..."
           mkdir -p android
-
           touch android/gradle.properties
 
-          grep -q "^android.useAndroidX=true" \
-            android/gradle.properties \
-            || echo "android.useAndroidX=true" >> android/gradle.properties
+          # Add AndroidX settings
+          grep -q "^android.useAndroidX=true" android/gradle.properties || \
+            echo "android.useAndroidX=true" >> android/gradle.properties
 
-          grep -q "^android.enableJetifier=true" \
-            android/gradle.properties \
-            || echo "android.enableJetifier=true" >> android/gradle.properties
+          grep -q "^android.enableJetifier=true" android/gradle.properties || \
+            echo "android.enableJetifier=true" >> android/gradle.properties
+
+          # Add JVM args
+          grep -q "^org.gradle.jvmargs" android/gradle.properties || \
+            echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G -XX:+HeapDumpOnOutOfMemoryError" >> android/gradle.properties
+
+          # ---- Fix settings.gradle ----
+          echo "Fixing settings.gradle..."
+          if [ -f "android/settings.gradle" ]; then
+            # Fix AGP version
+            sed -i 's/id "com.android.application" version ".*"/id "com.android.application" version "8.7.3"/g' android/settings.gradle
+            
+            # Fix Kotlin version
+            sed -i 's/id "org.jetbrains.kotlin.android" version ".*"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle
+            
+            # Fix plugin loader version
+            sed -i 's/id "dev.flutter.flutter-plugin-loader" version ".*"/id "dev.flutter.flutter-plugin-loader" version "1.0.0"/g' android/settings.gradle
+          elif [ -f "android/settings.gradle.kts" ]; then
+            # Fix AGP version
+            sed -i 's/id("com.android.application") version ".*"/id("com.android.application") version "8.7.3"/g' android/settings.gradle.kts
+            
+            # Fix Kotlin version
+            sed -i 's/id("org.jetbrains.kotlin.android") version ".*"/id("org.jetbrains.kotlin.android") version "1.9.24"/g' android/settings.gradle.kts
+          fi
+
+          # ---- Fix build.gradle ----
+          echo "Fixing build.gradle..."
+          if [ -f "android/app/build.gradle" ]; then
+            # Fix compileSdk
+            sed -i 's/compileSdk [0-9]*/compileSdk 35/g' android/app/build.gradle
+            
+            # Fix targetSdk
+            sed -i 's/targetSdk [0-9]*/targetSdk 35/g' android/app/build.gradle
+            
+            # Fix minSdk if too low
+            sed -i 's/minSdk [0-9]*/minSdk 24/g' android/app/build.gradle
+          elif [ -f "android/app/build.gradle.kts" ]; then
+            # Fix compileSdk
+            sed -i 's/compileSdk = [0-9]*/compileSdk = 35/g' android/app/build.gradle.kts
+            
+            # Fix targetSdk
+            sed -i 's/targetSdk = [0-9]*/targetSdk = 35/g' android/app/build.gradle.kts
+          fi
+
+          # ---- Fix gradle-wrapper.properties ----
+          echo "Fixing gradle-wrapper.properties..."
+          if [ -f "android/gradle/wrapper/gradle-wrapper.properties" ]; then
+            sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-all.zip|g' android/gradle/wrapper/gradle-wrapper.properties
+          else
+            mkdir -p android/gradle/wrapper
+            cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.9-all.zip
+EOF
+          fi
+
+          # ---- Remove v1 embedding files ----
+          echo "Removing v1 embedding files..."
+          find android -type f -name "GeneratedPluginRegistrant.java" -delete 2>/dev/null || true
+          find android -type f -name "GeneratedPluginRegistrant.kt" -delete 2>/dev/null || true
+          find android -type f -name "FlutterApplication.java" -delete 2>/dev/null || true
+          find android -type f -name "FlutterMain.java" -delete 2>/dev/null || true
+
+          # ---- Fix AndroidManifest.xml ----
+          echo "Fixing AndroidManifest.xml..."
+          if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
+            # Remove v1 embedding application name
+            sed -i 's/android:name="io.flutter.app.FlutterApplication"/android:name="${applicationName}"/g' android/app/src/main/AndroidManifest.xml
+            
+            # Add applicationName if not present
+            if ! grep -q 'android:name="${applicationName}"' android/app/src/main/AndroidManifest.xml; then
+              sed -i 's/<application/<application\n        android:name="${applicationName}"/g' android/app/src/main/AndroidManifest.xml
+            fi
+          fi
+
+          # ---- Fix MainActivity ----
+          echo "Checking MainActivity..."
+          MAIN_ACTIVITY=$(find android/app/src/main -name "MainActivity.*" | head -n 1)
+          
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            # Create MainActivity if not found
+            PACKAGE_NAME="com.intershare.marnommk"
+            MAIN_DIR="android/app/src/main/kotlin/${PACKAGE_NAME//.//}"
+            mkdir -p "$MAIN_DIR"
+            
+            cat > "$MAIN_DIR/MainActivity.kt" << EOF
+package $PACKAGE_NAME
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity: FlutterActivity() {
+}
+EOF
+            echo "MainActivity created."
+          else
+            echo "MainActivity found: $MAIN_ACTIVITY"
+            
+            # Check if using v1 embedding
+            if grep -q "io.flutter.app.FlutterActivity" "$MAIN_ACTIVITY"; then
+              # Fix v1 to v2
+              sed -i 's/io.flutter.app.FlutterActivity/io.flutter.embedding.android.FlutterActivity/g' "$MAIN_ACTIVITY"
+              echo "Fixed v1 to v2 embedding."
+            fi
+          fi
+
+          echo "======================================"
+          echo "ANDROID CONFIGURATION FIXED"
+          echo "======================================"
 
       # ============================================================
       # 10. PUB GET
@@ -206,6 +318,10 @@ jobs:
           set -e
 
           cd "$PROJECT_DIR"
+
+          echo "======================================"
+          echo "RUNNING FLUTTER PUB GET"
+          echo "======================================"
 
           flutter pub get
 
@@ -321,3 +437,25 @@ jobs:
             -F "chat_id=${OWNER_ID}" \
             -F "document=@${APK_PATH}" \
             -F "caption=🎉 InterShare 1.0.0+1 Release APK"
+
+      # ============================================================
+      # 16. ERROR HANDLING
+      # ============================================================
+
+      - name: Send Error Message
+        if: failure()
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          OWNER_ID: ${{ secrets.OWNER_CHAT_ID }}
+        run: |
+          set -e
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            -X POST \
+            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${OWNER_ID}" \
+            --data-urlencode "text=❌ Build InterShare gagal!%0A%0ACheck GitHub Actions untuk detail error."
