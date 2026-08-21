@@ -57,12 +57,14 @@ jobs:
 
           echo "✅ Owner verified."
 
+
       # ============================================================
       # 2. CHECKOUT
       # ============================================================
 
       - name: Checkout Repository
         uses: actions/checkout@v4
+
 
       # ============================================================
       # 3. JAVA 17
@@ -75,6 +77,7 @@ jobs:
           java-version: "17"
           cache: gradle
 
+
       # ============================================================
       # 4. FLUTTER
       # ============================================================
@@ -82,9 +85,10 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
+          flutter-version: "3.47.1"
           channel: stable
           cache: true
+
 
       # ============================================================
       # 5. ANDROID SDK
@@ -92,6 +96,7 @@ jobs:
 
       - name: Setup Android
         uses: android-actions/setup-android@v3
+
 
       # ============================================================
       # 6. TOOLS
@@ -108,9 +113,11 @@ jobs:
             unzip \
             curl \
             file \
-            python3
+            python3 \
+            xmlstarlet
 
           echo "✅ Tools installed."
+
 
       # ============================================================
       # 7. ENVIRONMENT
@@ -125,20 +132,14 @@ jobs:
           echo "INTERSHARE BUILD ENVIRONMENT"
           echo "=============================================="
 
-          echo ""
-          echo "Flutter:"
           flutter --version
-
-          echo ""
-          echo "Dart:"
           dart --version
-
-          echo ""
-          echo "Java:"
           java -version
 
           echo ""
-          echo "=============================================="
+          echo "Android SDK:"
+          echo "$ANDROID_HOME"
+
 
       # ============================================================
       # 8. DOWNLOAD ZIP
@@ -186,8 +187,6 @@ jobs:
 
           ls -lh project.zip
 
-          echo ""
-          file project.zip
 
       # ============================================================
       # 9. EXTRACT
@@ -206,12 +205,6 @@ jobs:
 
           echo "✅ ZIP extracted."
 
-          echo ""
-          echo "Project files:"
-          find flutter_project \
-            -maxdepth 2 \
-            -type f \
-            | head -100
 
       # ============================================================
       # 10. FIND PUBSPEC
@@ -241,15 +234,10 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
           echo "=============================================="
-          echo "FLUTTER PROJECT DETECTED"
+          echo "PROJECT"
           echo "=============================================="
-
-          echo "PUBSPEC:"
-          echo "$PUBSPEC"
-
-          echo ""
-          echo "PROJECT:"
           echo "$PROJECT_DIR"
+
 
       # ============================================================
       # 11. CHECK ANDROID
@@ -265,17 +253,6 @@ jobs:
             exit 1
           fi
 
-          if [ ! -f "$PROJECT_DIR/android/settings.gradle" ] && \
-             [ ! -f "$PROJECT_DIR/android/settings.gradle.kts" ]; then
-            echo "❌ settings.gradle/settings.gradle.kts tidak ditemukan."
-            exit 1
-          fi
-
-          if [ ! -d "$PROJECT_DIR/android/app" ]; then
-            echo "❌ Folder android/app tidak ditemukan."
-            exit 1
-          fi
-
           if [ ! -f "$PROJECT_DIR/android/app/src/main/AndroidManifest.xml" ]; then
             echo "❌ AndroidManifest.xml tidak ditemukan."
             exit 1
@@ -283,74 +260,484 @@ jobs:
 
           echo "✅ Android project detected."
 
+
       # ============================================================
-      # 12. INSPECT ANDROID CONFIG
+      # 12. SHOW ORIGINAL GRADLE CONFIG
       # ============================================================
 
-      - name: Inspect Android Configuration
+      - name: Inspect Original Android Gradle
         shell: bash
         run: |
           set -euo pipefail
 
           echo "=============================================="
-          echo "ANDROID CONFIGURATION"
+          echo "ORIGINAL ANDROID CONFIG"
           echo "=============================================="
 
           echo ""
-          echo "----- settings.gradle -----"
+          echo "--- settings.gradle ---"
 
           if [ -f "$PROJECT_DIR/android/settings.gradle" ]; then
-            sed -n '1,320p' \
-              "$PROJECT_DIR/android/settings.gradle"
-          else
-            echo "Not found."
+            sed -n '1,240p' "$PROJECT_DIR/android/settings.gradle"
           fi
 
           echo ""
-          echo "----- settings.gradle.kts -----"
+          echo "--- settings.gradle.kts ---"
 
           if [ -f "$PROJECT_DIR/android/settings.gradle.kts" ]; then
-            sed -n '1,320p' \
-              "$PROJECT_DIR/android/settings.gradle.kts"
-          else
-            echo "Not found."
+            sed -n '1,240p' "$PROJECT_DIR/android/settings.gradle.kts"
           fi
 
           echo ""
-          echo "----- android/build.gradle -----"
+          echo "--- build.gradle ---"
 
           if [ -f "$PROJECT_DIR/android/build.gradle" ]; then
-            sed -n '1,320p' \
-              "$PROJECT_DIR/android/build.gradle"
-          else
-            echo "Not found."
+            sed -n '1,260p' "$PROJECT_DIR/android/build.gradle"
           fi
 
           echo ""
-          echo "----- android/app/build.gradle -----"
+          echo "--- build.gradle.kts ---"
+
+          if [ -f "$PROJECT_DIR/android/build.gradle.kts" ]; then
+            sed -n '1,260p' "$PROJECT_DIR/android/build.gradle.kts"
+          fi
+
+          echo ""
+          echo "--- app/build.gradle ---"
 
           if [ -f "$PROJECT_DIR/android/app/build.gradle" ]; then
-            sed -n '1,380p' \
-              "$PROJECT_DIR/android/app/build.gradle"
-          else
-            echo "Not found."
+            sed -n '1,320p' "$PROJECT_DIR/android/app/build.gradle"
           fi
 
           echo ""
-          echo "----- android/app/build.gradle.kts -----"
+          echo "--- app/build.gradle.kts ---"
 
           if [ -f "$PROJECT_DIR/android/app/build.gradle.kts" ]; then
-            sed -n '1,380p' \
-              "$PROJECT_DIR/android/app/build.gradle.kts"
-          else
-            echo "Not found."
+            sed -n '1,320p' "$PROJECT_DIR/android/app/build.gradle.kts"
           fi
 
-          echo ""
-          echo "=============================================="
 
       # ============================================================
-      # 13. FIX FLUTTER ANDROID EMBEDDING
+      # 13. REMOVE BROKEN KOTLIN PLUGIN CONFIG
+      # ============================================================
+
+      - name: Normalize Kotlin Configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ANDROID_DIR="$PROJECT_DIR/android"
+
+          echo "=============================================="
+          echo "NORMALIZING KOTLIN CONFIGURATION"
+          echo "=============================================="
+
+          # --------------------------------------------------------
+          # settings.gradle
+          # --------------------------------------------------------
+
+          if [ -f "$ANDROID_DIR/settings.gradle" ]; then
+
+            python3 - "$ANDROID_DIR/settings.gradle" <<'PY'
+          import sys
+          import re
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          # Remove Kotlin plugin declarations from plugins block.
+          text = re.sub(
+              r'(?m)^[ \t]*id[ \t]*[\'"]org\.jetbrains\.kotlin\.android[\'"][^\n]*\n?',
+              '',
+              text
+          )
+
+          text = re.sub(
+              r'(?m)^[ \t]*id[ \t]*[\'"]org\.jetbrains\.kotlin\.jvm[\'"][^\n]*\n?',
+              '',
+              text
+          )
+
+          text = re.sub(
+              r'(?m)^[ \t]*id[ \t]*[\'"]org\.jetbrains\.kotlin[\'"][^\n]*\n?',
+              '',
+              text
+          )
+
+          # Remove kotlin plugin from pluginManagement repositories
+          # only if it is explicitly configured as a special repository.
+          text = text.replace(
+              'id "org.jetbrains.kotlin.android"',
+              ''
+          )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+
+          print("✅ settings.gradle normalized.")
+          PY
+
+          fi
+
+
+          # --------------------------------------------------------
+          # settings.gradle.kts
+          # --------------------------------------------------------
+
+          if [ -f "$ANDROID_DIR/settings.gradle.kts" ]; then
+
+            python3 - "$ANDROID_DIR/settings.gradle.kts" <<'PY'
+          import sys
+          import re
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          text = re.sub(
+              r'(?m)^[ \t]*id\s*\(\s*["\']org\.jetbrains\.kotlin\.android["\']\s*\)[^\n]*\n?',
+              '',
+              text
+          )
+
+          text = re.sub(
+              r'(?m)^[ \t]*id\s*\(\s*["\']org\.jetbrains\.kotlin\.jvm["\']\s*\)[^\n]*\n?',
+              '',
+              text
+          )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+
+          print("✅ settings.gradle.kts normalized.")
+          PY
+
+          fi
+
+
+      # ============================================================
+      # 14. FORCE SAFE GRADLE REPOSITORIES
+      # ============================================================
+
+      - name: Configure Gradle Repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ANDROID_DIR="$PROJECT_DIR/android"
+
+          echo "=============================================="
+          echo "CONFIGURING GRADLE REPOSITORIES"
+          echo "=============================================="
+
+          # --------------------------------------------------------
+          # settings.gradle
+          # --------------------------------------------------------
+
+          if [ -f "$ANDROID_DIR/settings.gradle" ]; then
+
+            python3 - "$ANDROID_DIR/settings.gradle" <<'PY'
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          header = r'''
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+              }
+          }
+
+          '''
+
+          # Remove existing pluginManagement block.
+          def remove_block(text, keyword):
+              start = text.find(keyword)
+              if start == -1:
+                  return text
+
+              brace = text.find("{", start)
+
+              if brace == -1:
+                  return text
+
+              depth = 0
+              end = None
+
+              for i in range(brace, len(text)):
+                  if text[i] == "{":
+                      depth += 1
+                  elif text[i] == "}":
+                      depth -= 1
+                      if depth == 0:
+                          end = i + 1
+                          break
+
+              if end is None:
+                  return text
+
+              return text[:start] + text[end:]
+
+          text = remove_block(text, "pluginManagement")
+
+          # Remove dependencyResolutionManagement.
+          text = remove_block(text, "dependencyResolutionManagement")
+
+          # Remove imports because settings.gradle normally has
+          # no import for RepositoriesMode.
+          if "RepositoriesMode" in text:
+              text = "import org.gradle.api.initialization.resolve.RepositoriesMode\n" + text
+
+          text = header + text.lstrip()
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+
+          print("✅ settings.gradle repositories configured.")
+          PY
+
+          fi
+
+
+      # ============================================================
+      # 15. FORCE FLUTTER PLUGIN LOADER
+      # ============================================================
+
+      - name: Normalize Flutter Settings
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SETTINGS="$PROJECT_DIR/android/settings.gradle"
+
+          if [ -f "$SETTINGS" ]; then
+
+            if ! grep -q "dev.flutter.flutter-plugin-loader" "$SETTINGS"; then
+
+              cat > "$SETTINGS" <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          plugins {
+              id "dev.flutter.flutter-plugin-loader" version "1.0.0"
+              id "com.android.application" version "8.6.1" apply false
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+              }
+          }
+
+          rootProject.name = "intershare"
+
+          def localPropertiesFile = new File(rootDir, "local.properties")
+
+          if (!localPropertiesFile.exists()) {
+              localPropertiesFile.createNewFile()
+          }
+
+          def localProperties = new Properties()
+
+          localPropertiesFile.withReader("UTF-8") { reader ->
+              localProperties.load(reader)
+          }
+
+          def flutterSdkPath = localProperties.getProperty("flutter.sdk")
+
+          if (flutterSdkPath == null) {
+              throw new GradleException(
+                  "flutter.sdk not set in local.properties"
+              )
+          }
+
+          include ":app"
+
+          apply from: "$flutterSdkPath/packages/flutter_tools/gradle/app_plugin_loader.gradle"
+          EOF
+
+              echo "✅ Flutter settings regenerated."
+
+            else
+
+              echo "✅ Flutter plugin loader already exists."
+
+            fi
+
+          fi
+
+
+      # ============================================================
+      # 16. CREATE SAFE ROOT BUILD.GRADLE
+      # ============================================================
+
+      - name: Normalize Root Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ANDROID_DIR="$PROJECT_DIR/android"
+
+          cat > "$ANDROID_DIR/build.gradle" <<'EOF'
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven {
+                      url "https://storage.googleapis.com/download.flutter.io"
+                  }
+              }
+          }
+
+          rootProject.buildDir = "../build"
+
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+          }
+
+          subprojects {
+              project.evaluationDependsOn(":app")
+          }
+
+          tasks.register("clean", Delete) {
+              delete rootProject.buildDir
+          }
+          EOF
+
+          echo "✅ Root build.gradle normalized."
+
+
+      # ============================================================
+      # 17. NORMALIZE APP GRADLE
+      # ============================================================
+
+      - name: Normalize App Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_GRADLE="$PROJECT_DIR/android/app/build.gradle"
+
+          if [ ! -f "$APP_GRADLE" ]; then
+            echo "❌ android/app/build.gradle tidak ditemukan."
+            exit 1
+          fi
+
+          python3 - "$APP_GRADLE" <<'PY'
+          import sys
+          import re
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          # --------------------------------------------------------
+          # Remove old Kotlin Gradle plugin.
+          # This is the source of:
+          #
+          # ApplicationExtensionImpl cannot be cast to BaseExtension
+          # --------------------------------------------------------
+
+          text = re.sub(
+              r'(?m)^[ \t]*apply[ \t]+plugin:[ \t]*["\']kotlin-android["\'][^\n]*\n?',
+              '',
+              text
+          )
+
+          text = re.sub(
+              r'(?m)^[ \t]*apply[ \t]+plugin:[ \t]*["\']org\.jetbrains\.kotlin\.android["\'][^\n]*\n?',
+              '',
+              text
+          )
+
+          text = re.sub(
+              r'(?m)^[ \t]*id[ \t]*["\']org\.jetbrains\.kotlin\.android["\'][^\n]*\n?',
+              '',
+              text
+          )
+
+          # --------------------------------------------------------
+          # Remove kotlin stdlib dependencies.
+          # --------------------------------------------------------
+
+          text = re.sub(
+              r'(?m)^[ \t]*(implementation|api|compileOnly|runtimeOnly)[ \t]*[\'"]org\.jetbrains\.kotlin:kotlin-stdlib[^\'"]*[\'"][^\n]*\n?',
+              '',
+              text
+          )
+
+          # --------------------------------------------------------
+          # Disable R8/minify.
+          #
+          # This avoids Play Core missing-class failures for projects
+          # that do not use deferred components.
+          # --------------------------------------------------------
+
+          text = re.sub(
+              r'minifyEnabled\s+true',
+              'minifyEnabled false',
+              text
+          )
+
+          text = re.sub(
+              r'shrinkResources\s+true',
+              'shrinkResources false',
+              text
+          )
+
+          # --------------------------------------------------------
+          # Ensure repositories.
+          # --------------------------------------------------------
+
+          if "maven { url" not in text:
+              text = """
+          repositories {
+              google()
+              mavenCentral()
+              maven {
+                  url "https://storage.googleapis.com/download.flutter.io"
+              }
+          }
+
+          """ + text
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+
+          print("✅ app/build.gradle normalized.")
+          PY
+
+
+      # ============================================================
+      # 18. ENSURE ANDROID MANIFEST
       # ============================================================
 
       - name: Fix Flutter Android Embedding
@@ -429,8 +816,9 @@ jobs:
           print("✅ Flutter Android Embedding V2 configured.")
           PY
 
+
       # ============================================================
-      # 14. VERIFY EMBEDDING
+      # 19. VERIFY EMBEDDING
       # ============================================================
 
       - name: Verify Flutter Embedding
@@ -440,584 +828,21 @@ jobs:
 
           MANIFEST="$PROJECT_DIR/android/app/src/main/AndroidManifest.xml"
 
-          if ! grep -q 'android:name="flutterEmbedding"' "$MANIFEST"; then
+          if ! grep -q 'flutterEmbedding' "$MANIFEST"; then
             echo "❌ flutterEmbedding metadata tidak ditemukan."
             exit 1
           fi
 
-          if ! grep -q 'android:value="2"' "$MANIFEST"; then
+          if ! grep -q 'value="2"' "$MANIFEST"; then
             echo "❌ Flutter Embedding V2 tidak aktif."
             exit 1
           fi
 
           echo "✅ Flutter Embedding V2 verified."
 
-      # ============================================================
-      # 15. FIX GRADLE REPOSITORIES
-      # ============================================================
-
-      - name: Fix Flutter Gradle Repositories
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SETTINGS="$PROJECT_DIR/android/settings.gradle"
-
-          if [ ! -f "$SETTINGS" ]; then
-            echo "❌ settings.gradle tidak ditemukan."
-            echo "Project menggunakan settings.gradle.kts."
-            exit 1
-          fi
-
-          echo "=============================================="
-          echo "CONFIGURING GRADLE REPOSITORIES"
-          echo "=============================================="
-
-          python3 - "$SETTINGS" <<'PY'
-          import sys
-          import re
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-          text = path.read_text()
-
-          FLUTTER_REPO = (
-              "https://storage.googleapis.com/download.flutter.io"
-          )
-
-          # ========================================================
-          # pluginManagement
-          # ========================================================
-
-          pm_start = text.find("pluginManagement {")
-
-          if pm_start >= 0:
-
-              brace_start = text.find("{", pm_start)
-
-              depth = 0
-              pm_end = None
-
-              for i in range(
-                  brace_start,
-                  len(text)
-              ):
-
-                  if text[i] == "{":
-                      depth += 1
-
-                  elif text[i] == "}":
-                      depth -= 1
-
-                      if depth == 0:
-                          pm_end = i + 1
-                          break
-
-              if pm_end is None:
-                  print("❌ pluginManagement invalid.")
-                  sys.exit(1)
-
-              pm_block = text[
-                  pm_start:pm_end
-              ]
-
-              if "repositories {" in pm_block:
-
-                  if "google()" not in pm_block:
-
-                      pm_block = pm_block.replace(
-                          "repositories {",
-                          "repositories {\n"
-                          "        google()",
-                          1
-                      )
-
-                  if "mavenCentral()" not in pm_block:
-
-                      pm_block = pm_block.replace(
-                          "repositories {",
-                          "repositories {\n"
-                          "        mavenCentral()",
-                          1
-                      )
-
-                  if "gradlePluginPortal()" not in pm_block:
-
-                      pm_block = pm_block.replace(
-                          "repositories {",
-                          "repositories {\n"
-                          "        gradlePluginPortal()",
-                          1
-                      )
-
-              text = (
-                  text[:pm_start]
-                  + pm_block
-                  + text[pm_end:]
-              )
-
-          # ========================================================
-          # dependencyResolutionManagement
-          # ========================================================
-
-          drm_start = text.find(
-              "dependencyResolutionManagement {"
-          )
-
-          if drm_start >= 0:
-
-              brace_start = text.find(
-                  "{",
-                  drm_start
-              )
-
-              depth = 0
-              drm_end = None
-
-              for i in range(
-                  brace_start,
-                  len(text)
-              ):
-
-                  if text[i] == "{":
-                      depth += 1
-
-                  elif text[i] == "}":
-                      depth -= 1
-
-                      if depth == 0:
-                          drm_end = i + 1
-                          break
-
-              if drm_end is None:
-                  print(
-                      "❌ dependencyResolutionManagement invalid."
-                  )
-                  sys.exit(1)
-
-              drm_block = text[
-                  drm_start:drm_end
-              ]
-
-              # ----------------------------------------------------
-              # Always use centralized repositories.
-              # ----------------------------------------------------
-
-              if "repositoriesMode.set" in drm_block:
-
-                  drm_block = re.sub(
-                      r"repositoriesMode\.set\s*\([^)]*\)",
-                      "repositoriesMode.set("
-                      "RepositoriesMode.PREFER_SETTINGS)",
-                      drm_block,
-                      count=1
-                  )
-
-              elif "repositoriesMode =" in drm_block:
-
-                  drm_block = re.sub(
-                      r"repositoriesMode\s*=.*",
-                      "repositoriesMode.set("
-                      "RepositoriesMode.PREFER_SETTINGS)",
-                      drm_block,
-                      count=1
-                  )
-
-              else:
-
-                  drm_block = drm_block.replace(
-                      "{",
-                      "{\n"
-                      "    repositoriesMode.set("
-                      "RepositoriesMode.PREFER_SETTINGS)",
-                      1
-                  )
-
-              # ----------------------------------------------------
-              # repositories block
-              # ----------------------------------------------------
-
-              if "repositories {" not in drm_block:
-
-                  repository_block = f"""
-              repositories {{
-                  google()
-                  mavenCentral()
-
-                  maven {{
-                      url = uri("{FLUTTER_REPO}")
-                  }}
-              }}
-          """
-
-                  drm_block = (
-                      drm_block[:-1]
-                      + repository_block
-                      + "\n}"
-                  )
-
-              else:
-
-                  repo_start = drm_block.find(
-                      "repositories {"
-                  )
-
-                  repo_brace = drm_block.find(
-                      "{",
-                      repo_start
-                  )
-
-                  depth = 0
-                  repo_end = None
-
-                  for i in range(
-                      repo_brace,
-                      len(drm_block)
-                  ):
-
-                      if drm_block[i] == "{":
-                          depth += 1
-
-                      elif drm_block[i] == "}":
-                          depth -= 1
-
-                          if depth == 0:
-                              repo_end = i + 1
-                              break
-
-                  if repo_end is None:
-                      print(
-                          "❌ repositories block invalid."
-                      )
-                      sys.exit(1)
-
-                  repo_block = drm_block[
-                      repo_start:repo_end
-                  ]
-
-                  if "google()" not in repo_block:
-
-                      repo_block = repo_block.replace(
-                          "repositories {",
-                          "repositories {\n"
-                          "        google()",
-                          1
-                      )
-
-                  if "mavenCentral()" not in repo_block:
-
-                      repo_block = repo_block.replace(
-                          "repositories {",
-                          "repositories {\n"
-                          "        mavenCentral()",
-                          1
-                      )
-
-                  if FLUTTER_REPO not in repo_block:
-
-                      repo_block = repo_block.replace(
-                          "repositories {",
-                          "repositories {\n"
-                          "        maven {\n"
-                          f'            url = uri("{FLUTTER_REPO}")\n'
-                          "        }",
-                          1
-                      )
-
-                  drm_block = (
-                      drm_block[:repo_start]
-                      + repo_block
-                      + drm_block[repo_end:]
-                  )
-
-              text = (
-                  text[:drm_start]
-                  + drm_block
-                  + text[drm_end:]
-              )
-
-          else:
-
-              block = f"""
-          dependencyResolutionManagement {{
-              repositoriesMode.set(
-                  RepositoriesMode.PREFER_SETTINGS
-              )
-
-              repositories {{
-                  google()
-                  mavenCentral()
-
-                  maven {{
-                      url = uri("{FLUTTER_REPO}")
-                  }}
-              }}
-          }}
-
-          """
-
-              marker = "rootProject.name"
-
-              if marker in text:
-
-                  text = text.replace(
-                      marker,
-                      block + marker,
-                      1
-                  )
-
-              else:
-
-                  text = block + text
-
-          path.write_text(text)
-
-          print(
-              "✅ Gradle repositories configured."
-          )
-          PY
-
-          echo ""
-          echo "=============================================="
-          echo "UPDATED settings.gradle"
-          echo "=============================================="
-
-          cat "$SETTINGS"
 
       # ============================================================
-      # 16. VERIFY REPOSITORIES
-      # ============================================================
-
-      - name: Verify Gradle Repositories
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SETTINGS="$PROJECT_DIR/android/settings.gradle"
-
-          echo "=============================================="
-          echo "VERIFY GRADLE REPOSITORIES"
-          echo "=============================================="
-
-          if grep -q "PREFER_PROJECT" "$SETTINGS"; then
-            echo "❌ PREFER_PROJECT masih ditemukan."
-            exit 1
-          fi
-
-          if ! grep -q "PREFER_SETTINGS" "$SETTINGS"; then
-            echo "❌ PREFER_SETTINGS tidak ditemukan."
-            exit 1
-          fi
-
-          if ! grep -q "google()" "$SETTINGS"; then
-            echo "❌ google() tidak ditemukan."
-            exit 1
-          fi
-
-          if ! grep -q "mavenCentral()" "$SETTINGS"; then
-            echo "❌ mavenCentral() tidak ditemukan."
-            exit 1
-          fi
-
-          if ! grep -q \
-            "storage.googleapis.com/download.flutter.io" \
-            "$SETTINGS"; then
-
-            echo "❌ Flutter Maven repository tidak ditemukan."
-            exit 1
-          fi
-
-          echo "✅ PREFER_SETTINGS"
-          echo "✅ google()"
-          echo "✅ mavenCentral()"
-          echo "✅ Flutter Maven"
-
-      # ============================================================
-      # 17. DISABLE R8 / MINIFICATION
-      # ============================================================
-
-      - name: Disable Release R8
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GRADLE="$PROJECT_DIR/android/app/build.gradle"
-          GRADLE_KTS="$PROJECT_DIR/android/app/build.gradle.kts"
-
-          echo "=============================================="
-          echo "DISABLING RELEASE R8"
-          echo "=============================================="
-
-          if [ -f "$GRADLE" ]; then
-
-            python3 - "$GRADLE" <<'PY'
-          import sys
-          import re
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-
-          text = path.read_text()
-
-          # --------------------------------------------------------
-          # Groovy:
-          #
-          # minifyEnabled true
-          # minifyEnabled = true
-          # --------------------------------------------------------
-
-          text = re.sub(
-              r"minifyEnabled\s*=?\s*true",
-              "minifyEnabled false",
-              text,
-              flags=re.IGNORECASE
-          )
-
-          # --------------------------------------------------------
-          # Groovy:
-          #
-          # shrinkResources true
-          # shrinkResources = true
-          # --------------------------------------------------------
-
-          text = re.sub(
-              r"shrinkResources\s*=?\s*true",
-              "shrinkResources false",
-              text,
-              flags=re.IGNORECASE
-          )
-
-          # --------------------------------------------------------
-          # isMinifyEnabled true
-          # --------------------------------------------------------
-
-          text = re.sub(
-              r"isMinifyEnabled\s*=?\s*true",
-              "isMinifyEnabled = false",
-              text,
-              flags=re.IGNORECASE
-          )
-
-          # --------------------------------------------------------
-          # isShrinkResources true
-          # --------------------------------------------------------
-
-          text = re.sub(
-              r"isShrinkResources\s*=?\s*true",
-              "isShrinkResources = false",
-              text,
-              flags=re.IGNORECASE
-          )
-
-          path.write_text(text)
-
-          print(
-              "✅ Groovy release minification disabled."
-          )
-          PY
-
-          fi
-
-          if [ -f "$GRADLE_KTS" ]; then
-
-            python3 - "$GRADLE_KTS" <<'PY'
-          import sys
-          import re
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-
-          text = path.read_text()
-
-          text = re.sub(
-              r"isMinifyEnabled\s*=\s*true",
-              "isMinifyEnabled = false",
-              text,
-              flags=re.IGNORECASE
-          )
-
-          text = re.sub(
-              r"isShrinkResources\s*=\s*true",
-              "isShrinkResources = false",
-              text,
-              flags=re.IGNORECASE
-          )
-
-          path.write_text(text)
-
-          print(
-              "✅ Kotlin DSL release minification disabled."
-          )
-          PY
-
-          fi
-
-          echo ""
-          echo "----- FINAL app/build.gradle -----"
-
-          if [ -f "$GRADLE" ]; then
-            sed -n '1,420p' "$GRADLE"
-          fi
-
-          echo ""
-          echo "----- FINAL app/build.gradle.kts -----"
-
-          if [ -f "$GRADLE_KTS" ]; then
-            sed -n '1,420p' "$GRADLE_KTS"
-          fi
-
-      # ============================================================
-      # 18. VERIFY R8 IS DISABLED
-      # ============================================================
-
-      - name: Verify R8 Configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GRADLE="$PROJECT_DIR/android/app/build.gradle"
-          GRADLE_KTS="$PROJECT_DIR/android/app/build.gradle.kts"
-
-          echo "=============================================="
-          echo "VERIFY R8 CONFIGURATION"
-          echo "=============================================="
-
-          if [ -f "$GRADLE" ]; then
-
-            if grep -Eiq \
-              "minifyEnabled[[:space:]]*=?[[:space:]]*true" \
-              "$GRADLE"; then
-
-              echo "❌ minifyEnabled true masih ditemukan."
-              exit 1
-            fi
-
-            if grep -Eiq \
-              "isMinifyEnabled[[:space:]]*=?[[:space:]]*true" \
-              "$GRADLE"; then
-
-              echo "❌ isMinifyEnabled true masih ditemukan."
-              exit 1
-            fi
-
-          fi
-
-          if [ -f "$GRADLE_KTS" ]; then
-
-            if grep -Eiq \
-              "isMinifyEnabled[[:space:]]*=[[:space:]]*true" \
-              "$GRADLE_KTS"; then
-
-              echo "❌ isMinifyEnabled true masih ditemukan."
-              exit 1
-            fi
-
-          fi
-
-          echo "✅ Release R8/minification disabled."
-
-      # ============================================================
-      # 19. PREPARE GRADLE WRAPPER
+      # 20. GRADLE WRAPPER
       # ============================================================
 
       - name: Prepare Gradle Wrapper
@@ -1025,41 +850,83 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f "$PROJECT_DIR/android/gradlew" ]; then
-            echo "❌ gradlew tidak ditemukan."
+          cd "$PROJECT_DIR/android"
+
+          if [ ! -f gradlew ]; then
+              echo "⚠️ gradlew tidak ditemukan."
+          else
+              chmod +x gradlew
+              echo "✅ gradlew executable."
+          fi
+
+
+      # ============================================================
+      # 21. NORMALIZE GRADLE VERSION
+      # ============================================================
+
+      - name: Normalize Gradle Wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WRAPPER="$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties"
+
+          if [ ! -f "$WRAPPER" ]; then
+            echo "❌ gradle-wrapper.properties tidak ditemukan."
             exit 1
           fi
 
-          chmod +x "$PROJECT_DIR/android/gradlew"
+          python3 - "$WRAPPER" <<'PY'
+          import sys
 
-          echo "✅ gradlew executable."
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              lines = f.readlines()
+
+          out = []
+
+          for line in lines:
+
+              if line.startswith("distributionUrl="):
+
+                  line = (
+                      "distributionUrl="
+                      "https\\://services.gradle.org/distributions/"
+                      "gradle-8.7-bin.zip\n"
+                  )
+
+              out.append(line)
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.writelines(out)
+
+          print("✅ Gradle wrapper set to 8.7.")
+          PY
+
 
       # ============================================================
-      # 20. GRADLE VERSION
+      # 22. REMOVE OLD GRADLE CACHE
       # ============================================================
 
-      - name: Show Gradle Version
+      - name: Clean Android Build Cache
         shell: bash
         run: |
           set -euo pipefail
 
-          cd "$PROJECT_DIR/android"
+          cd "$PROJECT_DIR"
 
-          ./gradlew --version
+          rm -rf \
+            .dart_tool \
+            build \
+            android/.gradle \
+            android/app/build
 
-      # ============================================================
-      # 21. FLUTTER DOCTOR
-      # ============================================================
+          echo "✅ Old build caches removed."
 
-      - name: Flutter Doctor
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          flutter doctor -v || true
 
       # ============================================================
-      # 22. FLUTTER CLEAN
+      # 23. FLUTTER CLEAN
       # ============================================================
 
       - name: Flutter Clean
@@ -1073,20 +940,6 @@ jobs:
 
           echo "✅ Flutter clean complete."
 
-      # ============================================================
-      # 23. STOP GRADLE
-      # ============================================================
-
-      - name: Stop Gradle Daemon
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR/android"
-
-          ./gradlew --stop || true
-
-          echo "✅ Gradle daemon stopped."
 
       # ============================================================
       # 24. PUB GET
@@ -1105,63 +958,26 @@ jobs:
 
           flutter pub get
 
-          echo ""
           echo "✅ Dependencies resolved."
 
+
       # ============================================================
-      # 25. VERIFY GENERATED CONFIG
+      # 25. FLUTTER DOCTOR
       # ============================================================
 
-      - name: Verify Flutter Generated Configuration
+      - name: Flutter Doctor
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=============================================="
-          echo "FLUTTER GENERATED CONFIGURATION"
-          echo "=============================================="
+          flutter doctor -v
 
-          if [ -f "$PROJECT_DIR/android/local.properties" ]; then
-
-            echo ""
-            echo "----- local.properties -----"
-
-            sed \
-              's#flutter.sdk=.*#flutter.sdk=***#' \
-              "$PROJECT_DIR/android/local.properties" \
-              || true
-
-          fi
-
-          echo ""
-          echo "----- Flutter Plugin Loader -----"
-
-          grep -R \
-            -n \
-            "flutter-plugin-loader" \
-            "$PROJECT_DIR/android" \
-            --exclude-dir=.gradle \
-            2>/dev/null \
-            | head -20 \
-            || true
-
-          echo ""
-          echo "----- Flutter Gradle Plugin -----"
-
-          grep -R \
-            -n \
-            "flutter-gradle-plugin" \
-            "$PROJECT_DIR/android" \
-            --exclude-dir=.gradle \
-            2>/dev/null \
-            | head -20 \
-            || true
 
       # ============================================================
-      # 26. FINAL GRADLE CHECK
+      # 26. GRADLE REPOSITORY CHECK
       # ============================================================
 
-      - name: Final Gradle Check
+      - name: Check Gradle Configuration
         shell: bash
         run: |
           set -euo pipefail
@@ -1169,19 +985,19 @@ jobs:
           cd "$PROJECT_DIR/android"
 
           echo "=============================================="
-          echo "FINAL GRADLE CHECK"
+          echo "GRADLE CONFIGURATION"
           echo "=============================================="
 
-          ./gradlew \
-            :app:tasks \
-            --no-daemon \
-            --stacktrace
+          ./gradlew --version
 
           echo ""
-          echo "✅ Gradle configuration is valid."
+          echo "Repositories:"
+          grep -R "google()" -n . --include="*.gradle" --include="*.gradle.kts" || true
+          grep -R "mavenCentral()" -n . --include="*.gradle" --include="*.gradle.kts" || true
+
 
       # ============================================================
-      # 27. BUILD APK
+      # 27. BUILD
       # ============================================================
 
       - name: Build InterShare APK
@@ -1205,6 +1021,7 @@ jobs:
           echo "=============================================="
           echo "             BUILD SUCCESS"
           echo "=============================================="
+
 
       # ============================================================
       # 28. FIND APK
@@ -1248,16 +1065,9 @@ jobs:
           echo "APK FOUND"
           echo "=============================================="
 
-          echo "Path:"
-          echo "$APK_PATH"
+          echo "Path: $APK_PATH"
+          echo "Size: ${APK_MB} MB"
 
-          echo ""
-          echo "Size:"
-          echo "${APK_MB} MB"
-
-          echo ""
-          echo "File:"
-          file "$APK_PATH"
 
       # ============================================================
       # 29. UPLOAD ARTIFACT
@@ -1271,8 +1081,9 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+
       # ============================================================
-      # 30. TELEGRAM SUCCESS MESSAGE
+      # 30. TELEGRAM MESSAGE
       # ============================================================
 
       - name: Send Telegram Result
@@ -1312,8 +1123,9 @@ jobs:
 
           echo "✅ Telegram success message sent."
 
+
       # ============================================================
-      # 31. SEND APK TO TELEGRAM
+      # 31. SEND APK
       # ============================================================
 
       - name: Send APK to Telegram
@@ -1344,6 +1156,7 @@ jobs:
             -F "caption=🎉 InterShare Release APK"
 
           echo "✅ APK sent to Telegram."
+
 
       # ============================================================
       # 32. FAILURE NOTIFICATION
