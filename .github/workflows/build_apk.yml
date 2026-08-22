@@ -6,68 +6,163 @@ on:
 jobs:
   vps:
     runs-on: ubuntu-latest
-    timeout-minutes: 4320
+    timeout-minutes: 360
     name: FREE VPS MARNO
 
     steps:
-      - name: Setup hostname & root prompt
+      - name: Setup hostname
         run: |
           echo "freevpsmarno" | sudo tee /etc/hostname
           sudo hostnamectl set-hostname freevpsmarno
           sudo sed -i 's/127.0.1.1.*/127.0.1.1 freevpsmarno/' /etc/hosts
-          sudo bash -c 'echo "export PS1=\"\u@freevpsmarno:\w# \"" > /root/.bashrc'
 
       - name: Detect VPS Specs & Region
         run: |
-          VPS_CITY=$(curl -s https://ipinfo.io/city)
-          VPS_REGION=$(curl -s https://ipinfo.io/region)
-          VPS_COUNTRY=$(curl -s https://ipinfo.io/country)
-          VPS_ORG=$(curl -s https://ipinfo.io/org)
-          VPS_CPU_MODEL=$(lscpu | grep "Model name" | sed 's/Model name:[ \t]*//')
-          VPS_CPU_CORES=$(lscpu | grep "^CPU(s):" | awk '{print $2}')
-          VPS_RAM=$(free -h | grep Mem | awk '{print $2}')
-          VPS_OS=$(lsb_release -ds)
+          VPS_CITY=$(curl -fsS https://ipinfo.io/city || echo "Unknown")
+          VPS_REGION=$(curl -fsS https://ipinfo.io/region || echo "Unknown")
+          VPS_COUNTRY=$(curl -fsS https://ipinfo.io/country || echo "Unknown")
+          VPS_ORG=$(curl -fsS https://ipinfo.io/org || echo "Unknown")
+          VPS_CPU_MODEL=$(lscpu | grep "Model name" | sed 's/Model name:[ \t]*//' | head -1)
+          VPS_CPU_CORES=$(nproc)
+          VPS_RAM=$(free -h | awk '/^Mem:/ {print $2}')
+          VPS_OS=$(lsb_release -ds 2>/dev/null || cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '"')
           VPS_HOSTNAME=$(hostname)
 
-          echo "VPS_CITY=$VPS_CITY" >> $GITHUB_ENV
-          echo "VPS_REGION=$VPS_REGION" >> $GITHUB_ENV
-          echo "VPS_COUNTRY=$VPS_COUNTRY" >> $GITHUB_ENV
-          echo "VPS_ORG=$VPS_ORG" >> $GITHUB_ENV
-          echo "VPS_CPU_MODEL=$VPS_CPU_MODEL" >> $GITHUB_ENV
-          echo "VPS_CPU_CORES=$VPS_CPU_CORES" >> $GITHUB_ENV
-          echo "VPS_RAM=$VPS_RAM" >> $GITHUB_ENV
-          echo "VPS_OS=$VPS_OS" >> $GITHUB_ENV
-          echo "VPS_HOSTNAME=$VPS_HOSTNAME" >> $GITHUB_ENV
+          {
+            echo "VPS_CITY=$VPS_CITY"
+            echo "VPS_REGION=$VPS_REGION"
+            echo "VPS_COUNTRY=$VPS_COUNTRY"
+            echo "VPS_ORG=$VPS_ORG"
+            echo "VPS_CPU_MODEL=$VPS_CPU_MODEL"
+            echo "VPS_CPU_CORES=$VPS_CPU_CORES"
+            echo "VPS_RAM=$VPS_RAM"
+            echo "VPS_OS=$VPS_OS"
+            echo "VPS_HOSTNAME=$VPS_HOSTNAME"
+          } >> "$GITHUB_ENV"
 
-      - name: Install tmate
+      - name: Install cloudflared
         run: |
-          sudo apt update
-          sudo apt install -y tmate curl lsb-release
+          curl -L --fail \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb \
+            -o /tmp/cloudflared.deb
 
-      - name: Start tmate session
+          sudo dpkg -i /tmp/cloudflared.deb
+
+          cloudflared --version
+
+      - name: Start local web server
         run: |
-          export TERM=xterm
-          sudo tmate -S /tmp/tmate.sock new-session -d -c /root >/dev/null 2>&1
-          sudo tmate -S /tmp/tmate.sock wait tmate-ready
-          SSH_CMD=$(sudo tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
-          WEB_CMD=$(sudo tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
-          echo "SSH_CMD=$SSH_CMD" >> $GITHUB_ENV
-          echo "WEB_CMD=$WEB_CMD" >> $GITHUB_ENV
+          mkdir -p /tmp/web
+
+          cat > /tmp/web/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <title>FREE VPS MARNO</title>
+          </head>
+          <body>
+            <h1>FREE VPS MARNO</h1>
+            <p>Cloudflare Tunnel is running.</p>
+          </body>
+          </html>
+          EOF
+
+          cd /tmp/web
+          nohup python3 -m http.server 8080 \
+            --bind 127.0.0.1 \
+            >/tmp/web.log 2>&1 &
+
+          sleep 2
+
+          curl -fsS http://127.0.0.1:8080/ >/dev/null
+
+      - name: Start Cloudflare Quick Tunnel
+        run: |
+          nohup cloudflared tunnel \
+            --url http://127.0.0.1:8080 \
+            --no-autoupdate \
+            >/tmp/cloudflared.log 2>&1 &
+
+          echo $! > /tmp/cloudflared.pid
+
+          echo "Menunggu URL Cloudflare..."
+
+          for i in $(seq 1 30); do
+            if grep -q "trycloudflare.com" /tmp/cloudflared.log; then
+              break
+            fi
+            sleep 2
+          done
+
+          CLOUDFLARE_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' /tmp/cloudflared.log | head -1)
+
+          if [ -z "$CLOUDFLARE_URL" ]; then
+            echo "Cloudflare Tunnel gagal mendapatkan URL."
+            cat /tmp/cloudflared.log
+            exit 1
+          fi
+
+          echo "CLOUDFLARE_URL=$CLOUDFLARE_URL" >> "$GITHUB_ENV"
+
+          echo "================================="
+          echo "CLOUDFLARE URL:"
+          echo "$CLOUDFLARE_URL"
+          echo "================================="
 
       - name: Send VPS info to Telegram
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          source $GITHUB_ENV
-          BOT_TOKEN="8455335513:AAFD2QUku9-fxFpz9oIF33IFbYHDj08P7Yk"
-          CHAT_ID="-1003046961134"
+          MESSAGE=$(printf '%s\n' \
+          "✅ Sukses create VPS" \
+          "" \
+          "ʙᴇʀɪᴋᴜᴛ ᴅᴇᴛᴀɪʟ Vᴘꜱ:" \
+          "" \
+          "🖥️ Hostname: %s" \
+          "⏰ Masa Aktif: sampai GitHub Actions menghentikan job" \
+          "📦 Spec: RAM %s | Core %s" \
+          "💿 OS: %s" \
+          "🌍 Region: %s, %s, %s" \
+          "" \
+          "🌐 PUBLIC WEB:" \
+          "%s" \
+          "" \
+          "⚠️ 𝗧.𝗢.𝗦 𝗩𝗣𝗦:" \
+          "• ɴᴏ ʜᴀᴄᴋɪɴɢ" \
+          "• ɴᴏ ᴍɪɴɪɴɢ" \
+          "• ɴᴏ ᴛᴏʀʀᴇɴᴛ" \
+          "• ɴᴏ ᴏᴠᴇʀʟᴏᴀᴅ (100%% ᴄᴘᴜ)" \
+          "• ɴᴏ ᴅᴅᴏs" \
+          "• ᴊᴀɴɢᴀɴ ᴅɪɢᴜɴᴀᴋᴀɴ ᴜɴᴛᴜᴋ ᴀᴋᴛɪᴠɪᴛᴀs ɪʟᴇɢᴀʟ" \
+          "" \
+          "Dev By Marno" \
+          "$VPS_HOSTNAME" \
+          "$VPS_RAM" \
+          "$VPS_CPU_CORES" \
+          "$VPS_OS" \
+          "$VPS_CITY" \
+          "$VPS_REGION" \
+          "$VPS_COUNTRY" \
+          "$CLOUDFLARE_URL")
 
-          MESSAGE=$(printf "✅ Sukses create Vps\nʙᴇʀɪᴋᴜᴛ ᴅᴇᴛᴀɪʟ Vᴘꜱ:\n\n🖥️ Hostname: %s\n⏰ Masa Aktif : 7 Jam\n📦 Spec: Ram %s Core %s\n💿 OS: %s\n🌍 Region: %s, %s, %s\n\n📡 ʟᴏɢɪɴ ᴠᴘꜱ:\n%s\n\n⚠️ 𝗧.𝗢.𝗦 𝗩𝗣𝗦:\n• ɴᴏ ʜᴀᴄᴋɪɴɢ\n• ɴᴏ ᴍɪɴɪɴɢ\n• ɴᴏ ᴛᴏʀʀᴇɴᴛ\n• ɴᴏ ᴏᴠᴇʀʟᴏᴀᴅ (100%% ᴄᴘᴜ)\n• ɴᴏ ᴅᴅᴏs\n• ɪɴᴛɪɴʏᴀ: ᴊᴀɴɢᴀɴ ᴅɪɢᴜɴᴀᴋᴀɴ ᴜɴᴛᴜᴋ ᴀᴋᴛɪꜰɪᴛᴀꜱ ɪʟᴇɢᴀʟ ᴀᴘᴀ ᴘᴜɴ\n\nDev By Marno" \
-          "$VPS_HOSTNAME" "$VPS_RAM" "$VPS_CPU_CORES" "$VPS_OS" "$VPS_CITY" "$VPS_REGION" "$VPS_COUNTRY" "$SSH_CMD")
+          curl -fsS -X POST \
+            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MESSAGE}"
 
-          curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-               -d chat_id="$CHAT_ID" \
-               -d text="$MESSAGE"
-
-      - name: Keep VPS alive silently
+      - name: Keep VPS alive
         run: |
-          echo "🔥 VPS will stay alive until GitHub forces shutdown 🔥"
-          while true; do sleep 300; done
+          echo "🔥 Cloudflare Tunnel aktif"
+          echo "🌐 $CLOUDFLARE_URL"
+
+          while true; do
+            if ! kill -0 "$(cat /tmp/cloudflared.pid)" 2>/dev/null; then
+              echo "Cloudflare Tunnel berhenti."
+              cat /tmp/cloudflared.log
+              exit 1
+            fi
+
+            sleep 300
+          done
